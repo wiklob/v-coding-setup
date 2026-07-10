@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# pr-health — compact PR status rollup (pure read).
+#
+# Usage: pr-health <pr-number>
+# Wraps the gh pr-view JSON the land-flow checks every ticket, pretty-printed.
+#   allow Bash(pr-health:*)
+#
+# Exit: 0 ok · 1 PR not found / gh error · 3 bad args
+set -euo pipefail
+
+pr="${1:-}"
+case "$pr" in ''|*[!0-9]*) echo "usage: pr-health <pr-number>" >&2; exit 3 ;; esac
+
+json="$(gh pr view "$pr" --json state,mergeable,mergeStateStatus,baseRefName,headRefName,additions,deletions,changedFiles,statusCheckRollup 2>/dev/null)" \
+  || { echo "pr-health: cannot read PR #$pr (gh error / not found)" >&2; exit 1; }
+
+printf '%s\n' "$json" | jq -r '
+  "PR #'"$pr"'  \(.headRefName) → \(.baseRefName)",
+  "  state:     \(.state)    mergeable: \(.mergeable)    \(.mergeStateStatus)",
+  "  diff:      +\(.additions) −\(.deletions)  across \(.changedFiles) files",
+  ( (.statusCheckRollup // []) as $c
+    | if ($c | length) == 0 then "  checks:    (none)"
+      else "  checks:    " + ( [ $c[]
+             | if   (.conclusion // "") != "" then .conclusion
+               elif (.state      // "") != "" then .state
+               else (.status     // "?") end ]
+           | group_by(.) | map("\(length)×\(.[0])") | join("  ") )
+      end )
+'

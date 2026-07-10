@@ -2,6 +2,8 @@
 .env
 .env.*
 !.env.example
+# direnv file (the ensure-envrc.sh SessionStart hook symlinks it into worktrees)
+.envrc
 
 # runtime
 *.log

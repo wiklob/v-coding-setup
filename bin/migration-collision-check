@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+# migration-collision-check — cross-branch / merged-set migration-prefix collision guard.
+#
+# The AUTHORING-and-LAND-time complement to sb-push's push-time check_migrations
+# (V-330): sb-push compares local prefixes against the *remote applied history* at
+# the prod-push boundary, so a duplicate/out-of-order YYYYMMDDHHMMSS prefix among
+# open sibling PRs (or between a PR and main) stays latent until a push. Parallel
+# `edit`-style worktrees author migrations with distinct FILENAMES that git merges
+# cleanly and every PR shows MERGEABLE — the collision only detonates at
+# `db push` / `db reset` (the 14-digit prefix is the PK in schema_migrations). This
+# helper catches it earlier: at /land-ticket time (git-ref mode, across the incoming
+# branch + main + every open sibling PR branch) and in CI (cwd mode, on the merge
+# result). It is a SIBLING of sb-push's guard, not a refactor — different data
+# source (git refs / a checked-out tree vs `supabase migration list --linked`), so
+# sb-push stays untouched.
+#
+# SELF-CONTAINED by design: no ~/.claude dependency, so the same file can be run
+# from ~/.claude/bin at land time AND vendored into a client repo's CI workflow.
+# Uses only git + coreutils. Reads only; never writes, pushes, or mutates anything.
+#
+# Usage:
+#   migration-collision-check [--dir <migdir>]                       # CWD MODE (CI merge-result)
+#       Check <migdir> in the current working tree for duplicate 14-digit prefixes.
+#       This is the acceptance's minimal core: `ls <migdir> | cut -c1-14 | sort | uniq -d`
+#       must be empty. Run in CI after checkout of the PR-merged-into-base ref.
+#
+#   migration-collision-check --base <ref> --head <ref> [--head <ref> ...] [--dir <migdir>]
+#       GIT-REF MODE (land time). Gather every migration's 14-digit prefix across
+#       <base> (the ordering baseline, e.g. origin/main) and each <head> (the
+#       incoming branch + sibling open-PR branches), then flag:
+#         • duplicate : one YYYYMMDDHHMMSS prefix borne by >=2 DISTINCT filenames
+#                       across the union (a file present identically in base and a
+#                       head is the SAME migration, not a duplicate);
+#         • out-of-order : a head migration ABSENT from base whose prefix sorts
+#                          at/before max(base prefixes) — it would interleave.
+#
+# Greppable verb for the allowlist:
+#   allow Bash(migration-collision-check:*)   — read-only, no mutation
+#
+# Exit: 0 = clean (or nothing to check) · 1 = collision(s) found (offenders named)
+#       · 3 = bad args
+set -euo pipefail
+
+migdir="supabase/migrations"
+base=""
+heads=()
+mode="cwd"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dir)  migdir="${2:-}"; shift 2 ;;
+    --base) base="${2:-}"; mode="ref"; shift 2 ;;
+    --head) heads+=("${2:-}"); mode="ref"; shift 2 ;;
+    -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "migration-collision-check: unknown arg '$1'" >&2; exit 3 ;;
+  esac
+done
+
+# 14-digit YYYYMMDDHHMMSS prefix parse — byte-identical to sb-new / sb-push
+# (${base:0:14} + a 14-digit glob), so all three guards agree on what a migration
+# prefix is. $1 = a basename; echoes the prefix if it is 14 digits, else nothing.
+prefix14() {
+  local ts="${1:0:14}"
+  case "$ts" in
+    [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) printf '%s' "$ts" ;;
+    *) : ;;
+  esac
+}
+
+violation=0
+
+# ── CWD MODE (CI merge-result): dup prefixes within the working tree's migdir ──
+if [ "$mode" = "cwd" ]; then
+  [ -d "$migdir" ] || { echo "migration-collision-check: no $migdir/ — nothing to check (clean)"; exit 0; }
+  # basename<TAB>prefix for every 14-digit-prefixed migration
+  pairs=""
+  for f in "$migdir"/*.sql; do
+    [ -e "$f" ] || continue                       # unmatched glob stays literal — no migrations
+    b="$(basename "$f")"; p="$(prefix14 "$b")"
+    [ -n "$p" ] || continue
+    pairs="$pairs$p	$b
+"
+  done
+  [ -n "$pairs" ] || { echo "migration-collision-check: no timestamped migrations in $migdir/ — nothing to check (clean)"; exit 0; }
+  for dup in $(printf '%s' "$pairs" | cut -f1 | sort | uniq -d); do
+    names="$(printf '%s' "$pairs" | awk -F'\t' -v d="$dup" '$1==d{printf " %s", $2}')"
+    echo "migration-collision-check: DUPLICATE prefix $dup:$names" >&2
+    violation=1
+  done
+  if [ "$violation" = 1 ]; then
+    echo "migration-collision-check: duplicate migration prefix(es) in the merged tree — resolve before landing (re-mint the later one via sb-new)" >&2
+    exit 1
+  fi
+  echo "migration-collision-check: no prefix collisions in $migdir/ (clean)"
+  exit 0
+fi
+
+# ── GIT-REF MODE (land time): union across base + heads ──
+[ -n "$base" ] || { echo "migration-collision-check: --base <ref> required in git-ref mode" >&2; exit 3; }
+command -v git >/dev/null 2>&1 || { echo "migration-collision-check: git not found — cannot run git-ref mode (skipped clean)"; exit 0; }
+
+# Gather "ref\tprefix\tbasename" rows for a ref's migrations. Skips a ref that
+# can't be resolved (prints a warning, degrades — never errors the whole run).
+rows=""
+gather() {
+  local ref="$1" label="$2" tree line b p
+  if ! git rev-parse --verify --quiet "$ref^{commit}" >/dev/null 2>&1; then
+    echo "migration-collision-check: WARNING — ref '$ref' ($label) unresolvable; skipping it" >&2
+    return 0
+  fi
+  # -r recurses; --name-only prints paths under migdir; empty when the ref has no migdir.
+  tree="$(git ls-tree -r --name-only "$ref" -- "$migdir" 2>/dev/null || true)"
+  [ -n "$tree" ] || return 0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    case "$line" in *.sql) ;; *) continue ;; esac
+    b="$(basename "$line")"; p="$(prefix14 "$b")"
+    [ -n "$p" ] || continue
+    rows="$rows$ref	$p	$b
+"
+  done <<EOF
+$tree
+EOF
+}
+
+gather "$base" "base"
+[ "${#heads[@]}" -gt 0 ] || { echo "migration-collision-check: no --head refs given — nothing to compare against base (clean)"; exit 0; }
+for h in "${heads[@]}"; do gather "$h" "head"; done
+[ -n "$rows" ] || { echo "migration-collision-check: no timestamped migrations across the given refs — nothing to check (clean)"; exit 0; }
+
+# ── duplicate: one prefix borne by >=2 DISTINCT basenames across the union ──
+# (a prefix that maps to a single basename — even if that file appears in several
+# refs — is the same migration, not a collision.)
+distinct="$(printf '%s' "$rows" | awk -F'\t' '{print $2"\t"$3}' | sort -u)"   # prefix<TAB>basename, unique pairs
+for dup in $(printf '%s' "$distinct" | cut -f1 | sort | uniq -d); do
+  names="$(printf '%s' "$distinct" | awk -F'\t' -v d="$dup" '$1==d{printf " %s", $2}')"
+  echo "migration-collision-check: DUPLICATE prefix $dup across branches:$names" >&2
+  violation=1
+done
+
+# ── out-of-order: a head migration ABSENT from base whose prefix <= max(base) ──
+base_prefixes="$(printf '%s' "$rows" | awk -F'\t' -v b="$base" '$1==b{print $2}' | sort -u)"
+if [ -n "$base_prefixes" ]; then
+  base_max="$(printf '%s' "$base_prefixes" | sort | tail -1)"
+  base_names="$(printf '%s' "$rows" | awk -F'\t' -v b="$base" '$1==b{print $3}' | sort -u)"
+  # Each distinct head file not already in base, checked against base_max.
+  head_pairs="$(printf '%s' "$rows" | awk -F'\t' -v b="$base" '$1!=b{print $2"\t"$3}' | sort -u)"
+  while IFS=$'\t' read -r p b; do
+    [ -n "$p" ] || continue
+    printf '%s\n' "$base_names" | grep -qxF "$b" && continue      # same file already in base — not new
+    if [ "$p" -le "$base_max" ]; then
+      echo "migration-collision-check: OUT-OF-ORDER $b (prefix $p) sorts at/before base's latest $base_max — would interleave; re-mint via sb-new" >&2
+      violation=1
+    fi
+  done <<EOF
+$head_pairs
+EOF
+fi
+
+if [ "$violation" = 1 ]; then
+  echo "migration-collision-check: cross-branch migration collision(s) above — resolve before landing" >&2
+  exit 1
+fi
+echo "migration-collision-check: no cross-branch prefix collisions across base + $((${#heads[@]})) head ref(s) (clean)"
+exit 0

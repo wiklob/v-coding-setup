@@ -19,7 +19,7 @@ Open-source extraction of the "v pipeline": an autonomous dev pipeline built on 
 | GitHub | Created private immediately; flips public only after the Phase-C clean-room audit |
 | History | Fresh (orphan root). Optional: hand-written `HISTORY.md` narrating the 762-commit self-development arc |
 | License | MIT, `Copyright (c) 2026 wiklob` (matches linear-mcp-lean) |
-| cbapp/Supabase | Strip product-specific helpers (`sb-mgmt`, `sb-push`, `sb-new`, `relocate-cbapp.sh`). Supabase-generic migration tooling: decide at port time (see checklist) |
+| cbapp/Supabase | **Revised at port (2026-07-10):** the `sb-*` helpers turned out to be fully generic, env-var-driven Supabase tooling (the "cbapp-specific" premise was wrong) and are deeply cross-referenced by guards/commands/CI — the whole Supabase module ships. Only `relocate-cbapp.sh` (genuinely product-specific) is stripped. |
 | v1 scope | Claude Code + Linear + macOS/launchd are **documented prerequisites**, not abstracted away |
 
 ## Source analysis (done 2026-07-10)
@@ -34,7 +34,7 @@ Open-source extraction of the "v pipeline": an autonomous dev pipeline built on 
 
 ## What ships — port checklist
 
-- [ ] **bin/** (~100 after strip): guards + hooks (`guard-secret-access.py`, `guard-repo-cd.py`, `normalize-tool-path.py`, `guard-migration-authoring.py`), loggers, watermark tools, launchd runners + installers, PR helpers (`pr-health`, `pr-close-guard`), session tooling, **the test suite** (`*.test.mjs` / `*.test.sh` — port gate: keep green). Genericize: derive root from script location / `$HOME`; launchd label namespace from config; `CLAUDE_BIN` / node paths not hardcoded. Strip: `sb-mgmt`, `sb-push`, `sb-new`, `relocate-cbapp.sh`. Decide at port: `migration-lint`, `migration-collision-check`, `guard-migration-authoring.py` (Supabase-generic — candidate optional module).
+- [x] **bin/** (103 files, done 2026-07-10): all guards/hooks/loggers/runners/installers/helpers + test suite ported. Genericized: launchd labels → `com.v-coding-setup.*`; `LINEAR_MCP_WRAPPER_URL` env replaces the hardcoded wrapper URL; `check-no-hardcoded-repo-cd.sh` + `probe-claude-gate.sh` derive patterns from `$HOME`/ticket-flow at runtime; `guard-repo-cd.test.sh` rewritten hermetic (sandbox HOME + checkout); `git-hygiene-runner.sh` reads extra repos from optional `~/.claude/git-hygiene-repos.txt`; fixtures → `/Users/testuser`/`myapp`. Stripped: `relocate-cbapp.sh` only (sb-* kept — see decision). Gate: 33/33 tests + 2 probes green.
 - [ ] **commands/** (46 skills) — scrub personal refs; verbs unchanged.
 - [ ] **craft/** (8 judgment registers), **memory/** (4 lesson registers — already generic), **templates/** (`ci/migration-collision-check.yml`), **scripts/** (`ingest-convo.py`).
 - [ ] **pipeline/** mechanism: `README.md`, `principles.md`, `review-standard.md`, `profiles/`, `schedule-registry.json` (empty). KB content files (`objectives.md`, `roadmap.md`, `landscape.md`, `decisions.md`, `owed.md`, `parked.md`, `decision-ledger.md`) ship as **blank templates** + an init flow.

@@ -1,0 +1,260 @@
+#!/usr/bin/env bash
+# sb-push — migration preview / gated apply (DX wrapper around `supabase db push`).
+#
+# Usage:
+#   sb-push [--dry-run]   list pending migrations + dry-run push   (SAFE)
+#   sb-push --apply       the above, then the REAL push to linked prod DB
+#
+# Retry-safe: re-reads the pending list each run; --apply only pushes what is
+# still pending. Loads ./.envrc from the current repo.
+#
+# The --apply path is the ONLY one that mutates prod and MUST stay behind
+#   ask Bash(sb-push --apply:*)
+# so wrapping does not bypass the existing `ask Bash(supabase db push*)` gate.
+# `--dry-run` (the default) is safe → allow Bash(sb-push --dry-run:*).
+#
+# Migration content-safety lint guard (--apply fatal, --dry-run warns):
+#   Timing/concurrency safety (the lock + ordering guard below) does NOT judge
+#   whether the SQL itself is dangerous. A DROP COLUMN, a bare ADD COLUMN ...
+#   NOT NULL (full-table rewrite), a type narrowing, a non-CONCURRENTLY index on
+#   a live table, or a rename passes every mechanical guard and would reach a
+#   blind human "yes". Before the lock and before any push, sb-push runs
+#   bin/migration-lint (a squawk wrapper) over supabase/migrations/*.sql:
+#     --apply  → hard-refuse (exit 1) on any flagged-unsafe op, BEFORE the lock
+#                is taken or anything pushes.
+#     --dry-run → same lint, non-fatal WARNING only (the safe path stays open).
+#   squawk absent is treated as a finding, NOT a silent skip: --apply fails
+#   closed (refuses) and --dry-run warns. Install hint is printed by
+#   migration-lint. No supabase/migrations dir / no .sql files → skipped clean.
+#
+# Concurrency lock (--apply only):
+#   Parallel ticket worktrees ($HOME/-claude-wt-*) all deploy --linked to
+#   ONE shared prod DB. To stop two concurrent applies racing on schema_migrations,
+#   --apply takes a host-global mutex BEFORE the real push and releases it on exit
+#   (incl. failure/interrupt, via trap — no stale lock left behind).
+#     Lock dir : $HOME/.claude/run/sb-push-<SUPABASE_PROJECT_ID>.lock  (mkdir-atomic,
+#                portable — no Linux `flock`). Keyed per project id, so different
+#                Supabase projects never block each other; host-global, NOT
+#                worktree-relative, so all worktrees contend on the same lock.
+#     Timeout  : a 2nd concurrent --apply waits up to $SB_PUSH_LOCK_TIMEOUT seconds
+#                (default 300), then exits 2 rather than hanging forever. A lock left
+#                by a kill -9'd holder (PID dead) is reclaimed automatically.
+#   --dry-run is read-only and stays completely lock-free.
+#
+# Pre-apply ordering & duplicate-timestamp guard (--apply fatal, --dry-run warns):
+#   Parallel branches can author migrations whose YYYYMMDDHHMMSS prefixes collide
+#   or sort BEFORE an already-applied remote migration — git sees distinct files
+#   and no textual conflict, but the apply interleaves or fails confusingly. Before
+#   pushing, sb-push parses the Remote column of `supabase migration list --linked`
+#   for the latest APPLIED remote timestamp and checks local supabase/migrations/
+#   *.sql for two hazards:
+#     • out-of-order : a pending local timestamp <= the latest applied remote
+#     • duplicate    : two local files sharing one YYYYMMDDHHMMSS prefix
+#   --apply  → hard-refuse (exit 1), naming the offending file(s) + the conflicting
+#              local/remote timestamp(s), BEFORE the lock is taken or anything pushes.
+#   --dry-run → same checks, non-fatal WARNING only (the safe path stays unblocked).
+#   Tolerant parse: matches 14-digit fields only, so the header row, the dashes
+#   separator, the Time (UTC) column and CLI-version spacing drift are all ignored.
+#   No supabase/migrations dir / no .sql files / no applied remote rows → the
+#   relevant check is skipped cleanly (never errors).
+#
+# Exit: 0 ok · 1 push rejected / domain failure / migration guard refused (--apply)
+#       · 2 network/retry OR another apply in progress (lock contention) · 3 bad args / missing env
+set -euo pipefail
+
+lock=""
+trap '[ -n "$lock" ] && rm -rf "$lock" 2>/dev/null || true' EXIT INT TERM
+
+mode="${1:---dry-run}"
+case "$mode" in --dry-run|--apply) ;; *) echo "usage: sb-push [--dry-run|--apply]" >&2; exit 3 ;; esac
+
+# V-36 (§4 med): source the REPO-ROOT .envrc (resolved via git), not whatever
+# `./.envrc` the cwd holds — a failed `cd`/hostile cwd can't redirect it. Falls back
+# to ./.envrc outside a git repo.
+_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -n "$_root" ] && [ -f "$_root/.envrc" ]; then set -a; . "$_root/.envrc"; set +a
+elif [ -f ./.envrc ]; then set -a; . ./.envrc; set +a; fi
+
+# Emit a guard finding: fatal=1 (--apply) refuses, fatal=0 (--dry-run) only warns.
+emit() { if [ "$1" = "1" ]; then echo "sb-push: REFUSED — $2" >&2; else echo "sb-push: WARNING — $2" >&2; fi; }
+
+# Pre-apply ordering & duplicate-timestamp guard. $1 = `migration list` output, $2 = fatal flag.
+# Parses the Remote column for the latest applied remote timestamp, then checks local
+# supabase/migrations/*.sql for duplicate prefixes and out-of-order (would-interleave) ones.
+check_migrations() {
+  local list_out="$1" fatal="$2" migdir="supabase/migrations"
+  local f base ts i dup names latest_remote remote_set violation=0
+  local files=() stamps=()
+
+  for f in "$migdir"/*.sql; do
+    [ -e "$f" ] || continue                       # unmatched glob stays literal — nothing to check
+    base="$(basename "$f")"; ts="${base:0:14}"
+    case "$ts" in
+      [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+      *) continue ;;                              # no 14-digit prefix — not a timestamped migration
+    esac
+    files+=("$f"); stamps+=("$ts")
+  done
+  [ "${#files[@]}" -eq 0 ] && return 0            # no local migrations → nothing to guard
+
+  # ── duplicate YYYYMMDDHHMMSS prefixes among local files ──
+  for dup in $(printf '%s\n' "${stamps[@]}" | sort | uniq -d); do
+    names=""
+    for i in "${!stamps[@]}"; do
+      if [ "${stamps[$i]}" = "$dup" ]; then names="$names $(basename "${files[$i]}")"; fi
+    done
+    emit "$fatal" "duplicate migration timestamp $dup:$names"
+    violation=1
+  done
+
+  # ── out-of-order vs latest applied remote (Remote column of `migration list`) ──
+  latest_remote="$(printf '%s\n' "$list_out" | awk -F'|' 'NF>=2 { gsub(/[^0-9]/,"",$2); if ($2 ~ /^[0-9]{14}$/) print $2 }' | sort | tail -1)"
+  if [ -n "$latest_remote" ]; then
+    remote_set="$(printf '%s\n' "$list_out" | awk -F'|' 'NF>=2 { gsub(/[^0-9]/,"",$2); if ($2 ~ /^[0-9]{14}$/) print $2 }')"
+    for i in "${!stamps[@]}"; do
+      ts="${stamps[$i]}"
+      if printf '%s\n' "$remote_set" | grep -qxF "$ts"; then continue; fi   # already applied remotely — not pending
+      if [ "$ts" -le "$latest_remote" ]; then
+        emit "$fatal" "out-of-order migration $(basename "${files[$i]}") (timestamp $ts) sorts at/before latest applied remote $latest_remote — would interleave"
+        violation=1
+      fi
+    done
+  fi
+
+  if [ "$fatal" = "1" ] && [ "$violation" = "1" ]; then
+    echo "sb-push: apply refused — resolve the migration ordering/duplicate conflict(s) above before pushing" >&2
+    exit 1
+  fi
+  return 0
+}
+
+# Migration content-safety lint guard. $1 = `migration list` output, $2 = fatal flag.
+# Runs bin/migration-lint (squawk) over local migrations to flag dangerous ops
+# (DROP COLUMN, ADD NOT NULL rewrite, type change, non-CONCURRENTLY index,
+# rename, DROP). Mirrors check_migrations: --apply fatal, --dry-run warns.
+# migration-lint exit 1 = finding, exit 3 = squawk absent — BOTH trip the guard
+# (absent squawk fails closed on --apply, never a silent skip).
+#
+# Scopes to PENDING migrations, mirroring check_migrations' pending-vs-remote
+# scoping: it parses the Remote column of `migration list` for already-applied
+# versions and lints only local files NOT in that set. Already-applied migrations
+# are in prod (unshippable) — re-linting them is pointless and would fail-close on
+# historical plain-CREATE-INDEX files that predate the squawk gate (V-153).
+#
+# Applied-version detection is FORMAT-AGNOSTIC (V-155): the version is matched as
+# any run of digits, and a local file's version is the leading-digit token before
+# its first underscore — so sequential 000NN, 14-digit timestamps, and other
+# schemes are all recognized. A file whose version cannot be parsed is linted
+# anyway (fail-closed, never silently skipped) — closing V-153's fail-open where a
+# non-14-digit repo emptied the pending set and skipped the content lint repo-wide.
+check_migration_content() {
+  local list_out="$1" fatal="$2" migdir="supabase/migrations"
+  local f base ver lint rc out remote_set
+  local pending=()
+
+  # Already-applied remote versions — FORMAT-AGNOSTIC (V-155). The Remote column of
+  # `migration list` carries the applied version verbatim (sequential 000NN, a
+  # 14-digit timestamp, or any other digit scheme), so match any run of digits, not
+  # a fixed 14-digit width. This is the prerequisite that lets applied history of
+  # ANY scheme be recognized and correctly skipped: without it a 000NN repo yields
+  # an empty applied set, and linting unparseable files anyway would re-lint the
+  # whole applied history (the V-153 over-block; CB-197's subtlety).
+  remote_set="$(printf '%s\n' "$list_out" | awk -F'|' 'NF>=2 { gsub(/[^0-9]/,"",$2); if ($2 ~ /^[0-9]+$/) print $2 }')"
+
+  # Collect what to lint: every PENDING file (classifiable, not in the applied set)
+  # PLUS every file we cannot classify (fail-closed — V-155, never a silent skip).
+  # A migration's version is the leading-digit token before the first underscore
+  # (how Supabase derives it). A file with no pure-digit version prefix is
+  # unclassifiable → linted defensively with a loud NOTE, so a dangerous pending
+  # file under an unexpected naming scheme is caught, not skipped (the V-153
+  # fail-open this closes for ALL schemes, not just 14-digit timestamps).
+  for f in "$migdir"/*.sql; do
+    [ -e "$f" ] || continue                       # unmatched glob stays literal — nothing to lint
+    base="$(basename "$f")"; ver="${base%%_*}"    # leading token before first '_'
+    case "$ver" in ''|*[!0-9]*) ver="" ;; esac    # not a pure-digit version → unclassifiable
+    if [ -n "$ver" ]; then
+      if printf '%s\n' "$remote_set" | grep -qxF "$ver"; then continue; fi   # classifiable & applied → skip
+      pending+=("$f")                             # classifiable & not applied → genuinely pending
+    else
+      echo "sb-push: NOTE — cannot classify migration version for $base; linting it defensively (fail-closed, V-155)" >&2
+      pending+=("$f")                             # unclassifiable → lint anyway, never silent-skip
+    fi
+  done
+  [ "${#pending[@]}" -eq 0 ] && return 0          # nothing pending / unclassifiable → nothing to lint
+
+  lint="$(dirname "$0")/migration-lint"
+  [ -x "$lint" ] || lint="migration-lint"   # fall back to PATH if not beside us
+  set +e
+  out="$("$lint" "${pending[@]}" 2>&1)"; rc=$?
+  set -e
+  [ -n "$out" ] && printf '%s\n' "$out" >&2
+  case "$rc" in
+    0) return 0 ;;
+    3) emit "$fatal" "migration content lint unavailable (squawk not installed) — migration safety NOT verified" ;;
+    *) emit "$fatal" "migration content lint flagged unsafe operation(s) above" ;;
+  esac
+  if [ "$fatal" = "1" ]; then
+    echo "sb-push: apply refused — resolve the migration content-safety finding(s) above before pushing" >&2
+    exit 1
+  fi
+  return 0
+}
+
+echo "── pending migrations ───────────────────────────"
+list_out="$(supabase migration list --linked)" || { echo "sb-push: migration list failed" >&2; exit 2; }
+printf '%s\n' "$list_out"
+
+# Guard before the lock and any push: --apply refuses on conflict, --dry-run only warns.
+fatal=0; if [ "$mode" = "--apply" ]; then fatal=1; fi
+check_migrations "$list_out" "$fatal"
+# Content safety, before the lock and the dry-run push (lint → ordering → lock).
+# Scoped to pending migrations using the same `migration list` output (V-153).
+check_migration_content "$list_out" "$fatal"
+
+echo "── dry-run push ─────────────────────────────────"
+supabase db push --linked --dry-run || { echo "sb-push: dry-run failed" >&2; exit 1; }
+
+if [ "$mode" = "--apply" ]; then
+  # Host-global mutex, keyed by project id. Acquire BEFORE the real push.
+  if [ -z "${SUPABASE_PROJECT_ID:-}" ]; then
+    echo "sb-push: SUPABASE_PROJECT_ID not set (source .envrc?) — cannot key the apply lock" >&2
+    exit 3
+  fi
+  lockroot="$HOME/.claude/run"
+  mkdir -p "$lockroot"
+  # V-36: `lock` (the trap-cleanup target) stays EMPTY until we actually hold the lock.
+  # The path lives in `lockpath`; the EXIT/INT/TERM trap removes only `$lock`, so a waiter
+  # that times out or is Ctrl-C'd BEFORE acquiring never deletes the *holder's* lock. The
+  # pre-V-36 race: `lock` was assigned before the mkdir loop, so an interrupted waiter
+  # rm-rf'd a lock it did not own, breaking the mutex mid-apply.
+  lockpath="$lockroot/sb-push-${SUPABASE_PROJECT_ID}.lock"
+  timeout="${SB_PUSH_LOCK_TIMEOUT:-300}"
+  waited=0
+  until mkdir "$lockpath" 2>/dev/null; do
+    # Lock is held. Reclaim it if the recorded holder is dead (kill -9 leaves no trap).
+    # Reclaim ATOMICALLY: rename the dead lock aside (single winner) before removing, so
+    # two waiters can't both rm-then-mkdir and both believe they acquired (V-36).
+    holder="$(cat "$lockpath/pid" 2>/dev/null || true)"
+    if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+      if mv "$lockpath" "$lockpath.dead.$$" 2>/dev/null; then
+        echo "sb-push: reclaiming stale lock from dead PID $holder" >&2
+        rm -rf "$lockpath.dead.$$"
+      fi
+      continue
+    fi
+    if [ "$waited" -ge "$timeout" ]; then
+      echo "sb-push: another apply in progress (lock held ≥ ${timeout}s) — exiting" >&2
+      exit 2
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  lock="$lockpath"          # we hold it now — arm trap cleanup
+  echo "$$" > "$lock/pid"
+
+  echo "── APPLYING to linked prod DB ───────────────────"
+  supabase db push --linked --yes || { echo "sb-push: push failed" >&2; exit 1; }
+  echo "── re-verify (should now be applied) ────────────"
+  supabase migration list --linked || true
+fi
+echo "sb-push: ${mode#--} complete"

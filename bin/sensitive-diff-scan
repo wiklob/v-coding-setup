@@ -1,0 +1,227 @@
+#!/usr/bin/env bash
+# sensitive-diff-scan — classify a PR diff as sensitive (security review must run)
+# or not, the single source of truth for /land-ticket §4.6's auto-trigger.
+#
+# Two passes, both encoded here so the prose and the probe can't drift (V-64):
+#   • PATH pass    — changed file paths match a sensitive glob.
+#   • CONTENT pass — added/removed lines match a sensitive token, file-aware:
+#                    test/spec files are never a content hit; markdown (*.md/*.mdx)
+#                    is scanned for the HIGH families only (V-163 — skill/CLAUDE.md
+#                    markdown is executable behavior, so a sandbox-disabling marker
+#                    in any .md must be caught; the noisy legacy tokens stay md-
+#                    exempt so prose doesn't flood); other files scan all tokens.
+#
+# Extends the legacy set with three families that disable the permission sandbox
+# itself — invisible to the old gate (V-52: install-harvest-cron.sh +
+# --dangerously-skip-permissions sailed through). Each is rated HIGH:
+#   • permission-bypass markers   (dangerously-skip-permissions, bypassPermissions,
+#                                  skip-permissions)
+#   • host-scheduler / persistence (crontab, launchctl, launchd, systemctl,
+#                                  *.plist under LaunchAgents/LaunchDaemons)
+#   • settings*.json permission-surface edits — both the permissions / allow /
+#                                  deny / bgIsolation KEY lines and bare allow/
+#                                  deny/ask LIST ENTRIES (V-128: an added/removed
+#                                  entry line carries no key token of its own —
+#                                  its enclosing "allow":[ is unchanged context,
+#                                  often outside the hunk — so the key pass alone
+#                                  missed it; PR #80 sailed through non-sensitive)
+#
+# Usage:
+#   sensitive-diff-scan            < full-unified-diff      (default: path+content)
+#   sensitive-diff-scan --paths    < newline-file-list      (cheap path-only pre-pass)
+#   sensitive-diff-scan --locate   < full-unified-diff      (file:line per HIGH/SENSITIVE hit)
+#     allow Bash(sensitive-diff-scan:*)
+#
+# Output (stdout):
+#   default / --paths — a verdict line: "HIGH · <reasons>" | "SENSITIVE · <reasons>"
+#                       | "non-sensitive". Read the exit code; severity is on stdout.
+#   --locate          — one line PER content hit: "<file>:<line>: <SEVERITY> · <reason>"
+#                       (line = the new-file line for an added hit, the old-file line
+#                       for a removed one). Lets a caller locating WHICH line tripped
+#                       the §4.6 floor use this helper instead of re-inlining the
+#                       marker regex in an ad-hoc shell grep (V-345 — the marker
+#                       patterns then live in only one place). Nothing printed = no hit.
+# Exit: 0 sensitive / hit(s) found · 1 non-sensitive / no hit · 3 bad args
+set -uo pipefail
+
+mode="content"
+case "${1:-}" in
+  --paths)  mode="paths" ;;
+  --locate) mode="locate" ;;
+  '')       mode="content" ;;
+  *)        echo "usage: sensitive-diff-scan [--paths | --locate] < diff" >&2; exit 3 ;;
+esac
+
+high=()        # HIGH reasons
+sens=()        # legacy-sensitive reasons
+hits=0         # --locate: count of emitted hits (drives the exit code)
+
+# Markdown (*.md/*.mdx). In ~/.claude, markdown IS executable behavior (a skill /
+# CLAUDE.md / craft instruction), so the CONTENT pass scans it for the HIGH families
+# only (V-163). Classification is by extension on the diff-header path, never the
+# filesystem, so a NEWLY-ADDED skill is treated identically to an existing one —
+# no path allowlist, no glob expansion, nothing to leave off a list and bypass.
+is_markdown() { case "$1" in *.md|*.mdx) return 0 ;; *) return 1 ;; esac; }
+
+# A test/spec file — never a content hit: its fixtures legitimately carry the very
+# tokens we hunt (this scanner's own .test.sh does), so scanning would self-trip.
+is_test() {
+  case "$1" in
+    *.test.*|*.spec.*) return 0 ;;
+    */__tests__/*|__tests__/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# A path is docs/test — never a security-tier PATH hit (markdown/test paths get no
+# path-based SENSITIVE classification; their CONTENT is judged separately, above).
+is_docs_or_test() { is_markdown "$1" || is_test "$1"; }
+
+# A bare array element in a settings*.json (a quoted string, optionally comma-
+# terminated, with NO "key": prefix) — i.e. a permission allow/deny/ask LIST
+# entry. These carry no PERM_KEYS token of their own: the enclosing "allow": [
+# is unchanged context, usually OUTSIDE the diff hunk (V-128, PR #80) — so the
+# PERM_KEYS pass alone misses an added/removed entry. In a Claude settings file
+# the dominant string-arrays are the permission lists, so a changed bare entry
+# is rated HIGH. Bias-safe: a false positive costs a waved-through review; a
+# false negative is the V-113 silent §4.6 bypass this closes. A "key": value
+# line keeps the colon and fails this match, so benign scalar edits stay clear.
+is_settings_list_entry() {
+  printf '%s' "$1" | grep -Eq '^[[:space:]]*"[^"]*"[[:space:]]*,?[[:space:]]*$'
+}
+
+# Classify one changed path (PATH pass). Sets high[]/sens[] as side effects.
+classify_path() {
+  local p="$1"
+  # NEW (HIGH): launchd persistence plists.
+  case "$p" in
+    *LaunchAgents/*.plist|*LaunchDaemons/*.plist) high+=("path:$p (launchd persistence)"); return ;;
+  esac
+  is_docs_or_test "$p" && return
+  # Legacy sensitive globs (reused + extended from §4.5 Tier C).
+  case "$p" in
+    */auth/*|*/middleware.*|*/api/*|supabase/migrations/*|*/.env*|.env*) sens+=("path:$p"); return ;;
+    *security*|*crypto*|*authz*|*acl*|*rbac*) sens+=("path:$p"); return ;;
+    *secret*|*token*|*credential*|*password*|*session*|*login*) sens+=("path:$p"); return ;;
+    *serial*|*deserialize*|*.sql|*query*) sens+=("path:$p"); return ;;
+  esac
+}
+
+# Content tokens (applied to a single added/removed line in a non-docs/test file).
+# HIGH families:
+HIGH_TOKENS='dangerously-skip-permissions|bypassPermissions|skip-permissions|crontab|launchctl|launchd|systemctl'
+# settings*.json permission-surface keys — only HIGH inside a settings json file.
+# The surrounding quotes are load-bearing: they scope the match to JSON keys
+# ("deny": …) so a benign settings line (e.g. "model": "opus") is not a hit.
+PERM_KEYS='"(permissions|allow|deny|bgIsolation)"'
+# Legacy sensitive content tokens.
+SENS_TOKENS='password|secret|token|api[_-]?key|private[_-]?key|authorization|jwt|oauth|hash|encrypt|decrypt|exec\(|eval\(|deserialize'
+
+# Classify ONE added/removed content line (body already stripped of the +/- prefix)
+# against the token families above, using the current file's context flags
+# (cur_settings / cur_md, set by the +++ header handler). Echoes "SEV|reason" on a
+# hit — SEV ∈ {HIGH, SENSITIVE}, reason the human phrase — or nothing on no hit.
+# This is the SINGLE SOURCE of the content marker patterns: both the verdict mode
+# and --locate call it, so a caller locating a hit's file:line reuses these exact
+# patterns instead of re-inlining the regex in shell — the two can't drift (V-345).
+classify_content_line() {
+  local body="$1"
+  if printf '%s' "$body" | grep -Eq "$HIGH_TOKENS"; then
+    echo "HIGH|permission-bypass / host-scheduler marker"
+  elif [ "$cur_settings" = 0 ] && printf '%s' "$body" | grep -Eq "$PERM_KEYS"; then
+    echo "HIGH|settings permission-surface edit"
+  elif [ "$cur_settings" = 0 ] && is_settings_list_entry "$body"; then
+    echo "HIGH|settings permission-list entry"
+  elif [ "$cur_md" != 1 ] && printf '%s' "$body" | grep -Eq "$SENS_TOKENS"; then
+    echo "SENSITIVE|legacy sensitive token"
+  fi
+}
+
+if [ "$mode" = "paths" ]; then
+  while IFS= read -r p; do
+    [ -n "$p" ] && classify_path "$p"
+  done
+else
+  # CONTENT pass over a full unified diff, file-aware. Shared by the default verdict
+  # mode and --locate; the latter additionally tracks new/old line numbers off the
+  # @@ hunk headers so it can emit file:line for each hit (V-345).
+  cur=""              # current file (from +++ b/ header)
+  old=""              # old-path (from --- a/ header) — classifies a deletion hunk
+  cur_skip=0          # 1 = current file is a test/spec (skip content entirely)
+  cur_md=0            # 1 = current file is markdown (scan HIGH families only)
+  cur_settings=1      # 0 = current file is a settings*.json
+  oldln=0             # current old-file line number (advances over -/context lines)
+  newln=0             # current new-file line number (advances over +/context lines)
+  while IFS= read -r line; do
+    case "$line" in
+      '--- '*)
+        # Remember the old-path: a deletion hunk's +++ is /dev/null, so the
+        # deleted file's real path lives here (V-177).
+        old="${line#--- }"; old="${old#a/}"
+        continue ;;
+      '+++ '*)
+        cur="${line#+++ }"; cur="${cur#b/}"
+        # Deletion hunk (+++ /dev/null): classify this hunk's flags off the
+        # OLD path, not the previous file's leaked values (V-177). Leave the
+        # PATH pass (classify_path) to the additions/modifications branch — a
+        # deleted path is already covered by --paths mode, so don't widen it.
+        if [ "$cur" = "/dev/null" ]; then
+          cur="$old"
+        else
+          classify_path "$cur"
+        fi
+        if [ -n "$cur" ]; then
+          if is_test "$cur"; then cur_skip=1; cur_md=0
+          elif is_markdown "$cur"; then cur_skip=0; cur_md=1
+          else cur_skip=0; cur_md=0
+          fi
+          case "$cur" in *settings*.json) cur_settings=0 ;; *) cur_settings=1 ;; esac
+        fi
+        continue ;;
+      '@@ '*)
+        # Hunk header: @@ -oldstart[,oldcount] +newstart[,newcount] @@ [context].
+        # Seed the line counters so --locate can report an accurate file:line.
+        hdr="${line#@@ -}"
+        oldln="${hdr%% *}"; oldln="${oldln%%,*}"
+        rest="${hdr#*+}";   newln="${rest%% *}"; newln="${newln%%,*}"
+        continue ;;
+      'diff --git '*|'index '*) continue ;;
+    esac
+    # added / removed / context line — advance the counters, classify +/- only.
+    case "$line" in
+      '+'*) body="${line:1}"; hitln="$newln"; newln=$((newln+1)) ;;
+      '-'*) body="${line:1}"; hitln="$oldln"; oldln=$((oldln+1)) ;;
+      ' '*) oldln=$((oldln+1)); newln=$((newln+1)); continue ;;  # context: both advance
+      *)    continue ;;                                          # "\ No newline", blank, etc.
+    esac
+    [ "$cur_skip" = 1 ] && continue   # test/spec: never a content hit
+    res="$(classify_content_line "$body")"
+    [ -z "$res" ] && continue
+    sev="${res%%|*}"; reason="${res#*|}"
+    if [ "$mode" = "locate" ]; then
+      printf '%s:%s: %s · %s\n' "$cur" "$hitln" "$sev" "$reason"
+      hits=$((hits+1))
+    elif [ "$sev" = "HIGH" ]; then
+      high+=("content:$cur ($reason)")
+    else
+      sens+=("content:$cur")   # markdown is HIGH-families-only; legacy tokens stay md-exempt
+    fi
+  done
+fi
+
+# --locate reports per-hit lines (already printed); its exit mirrors the verdict
+# convention — 0 when a hit was found, 1 when clean — so a caller can branch the same.
+if [ "$mode" = "locate" ]; then
+  [ "$hits" -gt 0 ] && exit 0 || exit 1
+fi
+
+if [ "${#high[@]}" -gt 0 ]; then
+  printf 'HIGH · %s\n' "$(IFS='; '; echo "${high[*]}")"
+  exit 0
+fi
+if [ "${#sens[@]}" -gt 0 ]; then
+  printf 'SENSITIVE · %s\n' "$(IFS='; '; echo "${sens[*]}")"
+  exit 0
+fi
+echo "non-sensitive"
+exit 1

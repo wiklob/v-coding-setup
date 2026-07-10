@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# sb-mgmt — Supabase Management API helper (bare verb).
+#
+# Usage: sb-mgmt <GET|PATCH|POST|PUT> <api-path> [json-body]
+#   <api-path> is appended after /v1/projects/$SUPABASE_PROJECT_ID/
+#   e.g.  sb-mgmt GET   config/auth
+#         sb-mgmt PATCH config/auth '{"mailer_secure_email_change_enabled":true}'
+#         sb-mgmt GET   'analytics/endpoints/logs.all?sql=select%20...'
+#
+# Loads ./.envrc from the CURRENT repo (not ~/.claude), resolves
+# $SUPABASE_PROJECT_ID + $SUPABASE_ACCESS_TOKEN (used implicitly — never echoed),
+# calls the Management API, and REFUSES to return success on a non-2xx response
+# (never jq-swallows an error — the V-6 fabrication lesson).
+#
+# Greppable verb for V-4 carve-outs:
+#   allow Bash(sb-mgmt GET:*)   ask Bash(sb-mgmt PATCH:*|POST:*|PUT:*)
+#
+# Exit: 0 ok (2xx) · 1 domain failure (non-2xx) · 2 network/retry · 3 bad args / missing env
+set -euo pipefail
+
+usage() { echo "usage: sb-mgmt <GET|PATCH|POST|PUT> <api-path> [json-body]" >&2; exit 3; }
+
+method="${1:-}"; path="${2:-}"; body="${3:-}"
+case "$method" in GET|PATCH|POST|PUT) ;; *) usage ;; esac
+[ -n "$path" ] || usage
+
+# Defense-in-depth: the raw-SQL endpoint runs arbitrary DDL/DML against prod and is
+# hard-DENIED for raw curl by the PreToolUse guard (V-27). Refuse it here too so this
+# verb can't become a bypass — schema changes go through migrations + `sb-push`.
+case "$path" in
+  *database/query*) echo "sb-mgmt: refusing database/query (raw prod SQL) — use a migration + sb-push" >&2; exit 3 ;;
+esac
+
+# Load the REPO-ROOT .envrc (secrets) — implicit use only, never displayed.
+# V-36 (§4 med): resolve it via git so a failed `cd` or a hostile cwd can't redirect
+# the source onto an untrusted `./.envrc`; fall back to ./.envrc outside a git repo.
+_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -n "$_root" ] && [ -f "$_root/.envrc" ]; then set -a; . "$_root/.envrc"; set +a
+elif [ -f ./.envrc ]; then set -a; . ./.envrc; set +a; fi
+if [ -z "${SUPABASE_PROJECT_ID:-}" ]; then echo "sb-mgmt: SUPABASE_PROJECT_ID not set (source .envrc?)" >&2; exit 3; fi
+if [ -z "${SUPABASE_ACCESS_TOKEN:-}" ]; then echo "sb-mgmt: SUPABASE_ACCESS_TOKEN not set (source .envrc?)" >&2; exit 3; fi
+
+url="https://api.supabase.com/v1/projects/${SUPABASE_PROJECT_ID}/${path}"
+
+tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
+args=(-sS -o "$tmp" -w '%{http_code}' -X "$method")
+[ -n "$body" ] && args+=(-H 'Content-Type: application/json' -d "$body")
+# V-363: pass the bearer via stdin (`-H @-`), never argv — keeps the Management-API
+# token out of `ps`/`/proc/<pid>/cmdline`. `printf` is a bash builtin (no forked
+# process), so the token value never lands in the process table either.
+code="$(printf 'Authorization: Bearer %s' "$SUPABASE_ACCESS_TOKEN" | curl "${args[@]}" -H @- "$url")" \
+  || { echo "sb-mgmt: network error on $method $path" >&2; exit 2; }
+
+if [ "$code" -ge 200 ] && [ "$code" -lt 300 ]; then
+  cat "$tmp"; echo
+  exit 0
+fi
+echo "sb-mgmt: $method $path → HTTP $code" >&2
+cat "$tmp" >&2; echo >&2
+exit 1

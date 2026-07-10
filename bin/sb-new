@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# sb-new — mint a collision-free migration filename (AUTHORING ONLY).
+#
+# Usage: sb-new <name>
+#   Writes supabase/migrations/<UTC-timestamp>_<slug>.sql and prints the path.
+#   <name> is slugified to [a-z0-9_] (lowercased, non-alnum runs → _, trimmed).
+#
+# AUTHORING ONLY — never pushes, never touches prod, makes no network/CLI call.
+# It only reads the local supabase/migrations dir and writes one new stub file.
+# Preview / apply the result separately with `sb-push --dry-run` / `sb-push --apply`.
+#
+# Collision-free monotonic prefix (the point — prevention complementing V-30's
+# push-time detection in sb-push): parallel ticket worktrees authoring in the same
+# window must never produce equal/adjacent YYYYMMDDHHMMSS prefixes. The minted
+# prefix is max(now_utc, latest_local_prefix + 1s):
+#   • enumerate local supabase/migrations/*.sql, take each 14-digit basename prefix
+#     (same parse as sb-push — 14-digit fields only, everything else ignored);
+#   • latest = numerically greatest existing prefix (empty if none);
+#   • if now_utc <= latest, bump latest by one whole second (carry-correct via epoch
+#     round-trip — never string arithmetic, which breaks at :59) so the result is
+#     STRICTLY greater than every existing prefix; otherwise use now_utc.
+# Result: two near-simultaneous / cross-branch calls get distinct, ordered prefixes.
+#
+# Greppable verb for the allowlist:
+#   allow Bash(sb-new:*)   — local-only, no prod mutation
+#
+# Exit: 0 ok · 3 bad args (empty name / empty post-slug) or prefix collision
+set -euo pipefail
+
+migdir="supabase/migrations"
+
+name="${1:-}"
+if [ -z "$name" ]; then echo "sb-new: name required — usage: sb-new <name>" >&2; exit 3; fi
+
+# Slugify to [a-z0-9_]: lowercase, non-alnum runs → _, trim leading/trailing _.
+slug="$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/_/g; s/^_+//; s/_+$//')"
+if [ -z "$slug" ]; then echo "sb-new: name '$name' slugifies to empty — give a name with letters/digits" >&2; exit 3; fi
+
+# Add one whole second to a YYYYMMDDHHMMSS stamp, carry-correct (BSD/macOS or GNU date).
+bump_one_second() {
+  local stamp="$1" epoch
+  if date -u -j -f '%Y%m%d%H%M%S' "$stamp" '+%s' >/dev/null 2>&1; then
+    epoch="$(date -u -j -f '%Y%m%d%H%M%S' "$stamp" '+%s')"   # BSD/macOS
+    date -u -r "$((epoch + 1))" '+%Y%m%d%H%M%S'
+  else
+    local iso="${stamp:0:4}-${stamp:4:2}-${stamp:6:2} ${stamp:8:2}:${stamp:10:2}:${stamp:12:2}"
+    date -u -d "$iso +1 second" '+%Y%m%d%H%M%S'             # GNU
+  fi
+}
+
+# latest = numerically greatest existing 14-digit local migration prefix (empty if none).
+latest=""
+for f in "$migdir"/*.sql; do
+  [ -e "$f" ] || continue                       # unmatched glob stays literal — no local migrations
+  base="$(basename "$f")"; ts="${base:0:14}"
+  case "$ts" in
+    [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+    *) continue ;;                              # not a 14-digit-prefixed migration
+  esac
+  if [ -z "$latest" ] || [ "$ts" -gt "$latest" ]; then latest="$ts"; fi
+done
+
+now="$(date -u +%Y%m%d%H%M%S)"
+if [ -n "$latest" ] && [ "$now" -le "$latest" ]; then
+  ts="$(bump_one_second "$latest")"             # tie / clock-skew → strictly greater
+else
+  ts="$now"
+fi
+
+# Belt-and-suspenders: refuse if a file already carries this prefix (e.g. a stray
+# future-dated migration). With ts > max this should be unreachable.
+collide=("$migdir/${ts}_"*.sql)
+if [ -e "${collide[0]}" ]; then
+  echo "sb-new: refusing — a migration with prefix $ts already exists: $(basename "${collide[0]}")" >&2
+  exit 3
+fi
+
+mkdir -p "$migdir"
+file="$migdir/${ts}_${slug}.sql"
+cat > "$file" <<EOF
+-- Migration: ${slug}
+-- Created: ${ts} UTC by sb-new (authoring only — not yet applied).
+-- Add DDL/DML below, then: sb-push --dry-run  (preview)  ·  sb-push --apply  (deploy)
+EOF
+
+echo "$file"

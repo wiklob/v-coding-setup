@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# migration-lint — content-safety linter for Postgres migrations (squawk wrapper).
+#
+# Flags the dangerous migration ops that the V-30 ordering/duplicate guard and
+# the V-29 apply-lock cannot see: DROP COLUMN, ADD COLUMN NOT NULL without a
+# default (full-table rewrite + ACCESS EXCLUSIVE lock), column type changes,
+# non-CONCURRENTLY index creation on a live table, renames, DROP. Wraps
+# `squawk` (https://squawkhq.com) — rewrite-vs-not is PG-version- and
+# column-specific, so we do NOT hand-roll a regex scanner.
+#
+# Usage:
+#   migration-lint [FILE_OR_GLOB ...]      # default: supabase/migrations/*.sql
+#
+# Exit codes (consumed by bin/sb-push's apply/dry-run guard):
+#   0  clean — no flagged-unsafe op (or nothing to lint)
+#   1  squawk flagged at least one unsafe op
+#   3  squawk is NOT installed — content safety could NOT be checked
+#
+# Read-only: only reads the .sql files; never writes, never touches the DB.
+# Safe to allowlist (Bash(bin/migration-lint:*)). It is NOT a substitute for
+# the apply-time chokepoint: sb-push --apply treats BOTH exit 1 and exit 3 as
+# fatal, so an absent squawk fails closed rather than silently skipping.
+#
+# squawk install (absence is loud, never silent — see exit 3):
+#   npm install -g squawk-cli
+#   brew install https://raw.githubusercontent.com/sbdchd/squawk/master/Formula/squawk.rb
+#
+# Advisory-rule exclusions (override with MIGRATION_LINT_EXCLUDE): squawk's
+# default set includes rules that fire on EVERY statement — including benign
+# additive ones (CREATE TABLE, nullable ADD COLUMN) — or that are impossible to
+# satisfy under transactional Supabase `db push`:
+#   • prefer-robust-stmts             (missing IF [NOT] EXISTS)
+#   • require-timeout-settings        (missing set lock_timeout / statement_timeout)
+#   • require-concurrent-index-creation
+#         CREATE INDEX CONCURRENTLY cannot run inside a transaction, and Supabase
+#         `db push` is transactional — so every index-adding migration trips this
+#         rule with NO satisfiable fix (V-155). It's noise, not a gate; exclude it.
+# Gating on those would block clean / unavoidable migrations (a false-positive
+# gate), so we exclude them — the guard fires only on genuinely-dangerous ops.
+# NOT excluded (kept active): adding-not-nullable-field — avoidable via
+# ADD … NOT NULL DEFAULT <x> → backfill → DROP DEFAULT, so it stays a real gate.
+set -euo pipefail
+
+EXCLUDE="${MIGRATION_LINT_EXCLUDE:-prefer-robust-stmts,require-timeout-settings,require-concurrent-index-creation}"
+
+if ! command -v squawk >/dev/null 2>&1; then
+  echo "migration-lint: squawk not installed — migration content safety NOT checked." >&2
+  echo "migration-lint: install with 'npm install -g squawk-cli' or the squawk Homebrew formula, then retry." >&2
+  exit 3
+fi
+
+# Resolve targets. No args → default to the standard migrations glob.
+patterns=("$@")
+[ "${#patterns[@]}" -eq 0 ] && patterns=("supabase/migrations/"*.sql)
+
+# Keep only paths that actually exist — an unmatched glob stays literal (nullglob
+# is off), and squawk exits non-zero on a missing pattern, which would be a false
+# positive. Filtering here makes "no migrations" a clean exit 0, mirroring
+# sb-push's check_migrations skip.
+files=()
+for p in "${patterns[@]}"; do
+  [ -e "$p" ] && files+=("$p")
+done
+[ "${#files[@]}" -eq 0 ] && exit 0
+
+# squawk: exit 0 clean, exit 1 on findings. Its report (the findings) goes to
+# the caller verbatim so sb-push / land-ticket can surface it to the human.
+exec squawk --exclude "$EXCLUDE" "${files[@]}"

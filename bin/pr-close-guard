@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# pr-close-guard — reject GitHub/Linear closing magic-words in a PR body (V-14).
+#
+# A closing keyword (close/closes/fix/fixes/resolve/.../complete/implement…) followed
+# by a Linear issue id (e.g. `Closes V-14`) auto-transitions that issue to Done when
+# the PR merges. Linear scans the WHOLE body, so a sibling reference silently closes
+# the WRONG ticket before it's built/tested — the CB-122 cross-fire.
+#
+# The pipeline forbids closing keywords in PR bodies entirely. PR bodies link the
+# ticket with NON-closing refs only (`Part of <ID>`, `Relates to <ID>`, bare link);
+# /land-ticket §8 closes the ticket explicitly + acceptance-gated. This guard makes
+# that an enforced invariant, not a prose convention.
+#
+# Usage:
+#   pr-close-guard <pr-number>          read the PR body via `gh pr view`
+#   pr-close-guard --body-file <path>   read a body from a file (`-` = stdin)
+#   allow Bash(pr-close-guard:*)
+#
+# Exit: 0 clean · 1 closing keyword found (prints offenders) · 3 bad args / gh error
+set -euo pipefail
+
+usage() { echo "usage: pr-close-guard <pr-number> | --body-file <path|->" >&2; exit 3; }
+
+body=""
+case "${1:-}" in
+  --body-file)
+    [ -n "${2:-}" ] || usage
+    if [ "$2" = "-" ]; then body="$(cat)"; else body="$(cat "$2")" || exit 3; fi
+    ;;
+  '' | *[!0-9]* )
+    usage ;;
+  * )
+    body="$(gh pr view "$1" --json body -q .body 2>/dev/null)" \
+      || { echo "pr-close-guard: cannot read PR #$1 (gh error / not found)" >&2; exit 3; }
+    ;;
+esac
+
+# Keyword case-insensitive (Linear fires on any case); Linear id stays uppercase to
+# avoid prose false positives. \b stops "prefix"/"unfixed"/"foreclose" from tripping.
+hits="$(printf '%s' "$body" | perl -0777 -ne '
+  while (/\b(?i:clos(?:e|es|ed|ing)|fix(?:|es|ed|ing)|resolv(?:e|es|ed|ing)|complet(?:e|es|ed|ing)|implement(?:|s|ed|ing))[\s:]+([A-Z]+-\d+)/g) {
+    print "$&\n";
+  }')"
+
+if [ -n "$hits" ]; then
+  {
+    echo "pr-close-guard: PR body contains closing magic-word(s) — would auto-close the ticket on merge:"
+    printf '%s\n' "$hits" | sed 's/^/  /'
+    echo "Use a non-closing reference instead (Part of <ID> / Relates to <ID> / bare link)."
+    echo "/land-ticket §8 closes the ticket explicitly after acceptance — no closing keyword belongs in a PR body."
+  } >&2
+  exit 1
+fi
+exit 0

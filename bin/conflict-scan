@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# conflict-scan — find unresolved merge-conflict markers (+ git whitespace/marker
+# check on the worktree diff when scanning the bare cwd).
+#
+# Usage: conflict-scan [path ...]   (defaults to .)
+#   allow Bash(conflict-scan:*)
+#
+# Exit: 0 clean · 1 markers / diff errors found
+set -uo pipefail
+
+paths=("$@"); [ ${#paths[@]} -eq 0 ] && paths=(.)
+
+found=0
+# Primary: the three 7-char conflict markers, anchored at line start and followed
+# by a space or end-of-line. The ( |$) anchor excludes 8+-char divider rules
+# (e.g. a markdown `========` underline) while still catching `<<<<<<< HEAD`,
+# a lone `=======`, and `>>>>>>> branch`.
+if grep -rnE --exclude-dir=.git '^(<{7}|={7}|>{7})( |$)' "${paths[@]}" 2>/dev/null; then
+  found=1
+fi
+# Secondary: git's own whitespace/conflict check on the worktree diff — only when
+# scanning the bare cwd ($1 unset) inside a work tree. Exit 1 = problems found;
+# any other non-zero (e.g. 128 = path outside repo) is "not applicable", not a finding.
+if [ -z "${1:-}" ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  git diff --check; [ "$?" -eq 1 ] && found=1
+fi
+
+if [ "$found" -ne 0 ]; then
+  echo "conflict-scan: conflict markers or diff errors found ↑" >&2
+  exit 1
+fi
+echo "conflict-scan: clean"
+exit 0

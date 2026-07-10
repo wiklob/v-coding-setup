@@ -49,7 +49,7 @@ Open-source extraction of the "v pipeline": an autonomous dev pipeline built on 
 
 **A — Port + genericize the engine.** Order: bin + tests (green = gate) → commands → craft/memory/templates/scripts → pipeline mechanism → convention docs → engine docs → settings fragment → ticket-flow example → CLAUDE.md template.
 
-**B — Packaging.** `install.sh`: non-destructive symlink/copy into `~/.claude` (back up collisions), settings-fragment merge, interactive `ticket-flow.json` generation, optional launchd install, PATH instructions. README with architecture + quickstart. CONTRIBUTING. `.github/` CI: bin test suite + scrub-list grep-gate + gitleaks.
+**B — Packaging** *(done 2026-07-10)*. `install.sh` (per-file symlink engine / copy-if-absent KB+config, backups, --dry-run, printed manual steps — smoke-tested against a sandbox CLAUDE_CONFIG_DIR, idempotent). README (architecture, quickstart, security model, rituals table). CONTRIBUTING. CI: `bin/run-tests.sh` on macos-latest + `.github/scrub-gate.sh` (two-tier: hard strings anywhere, bare handle outside LICENSE/README/plan/github-URLs) + gitleaks.
 
 **C — Launch.** Clean-room install test (fresh account/VM); empirical scrub probe of the published tree (grep the scrub list — probe, don't trust artifact presence); flip repo public; description/topics; optional demo recording.
 

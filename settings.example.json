@@ -1,0 +1,257 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git *)",
+      "Bash(gh *)",
+      "Bash(rsync *)",
+      "Bash(npm *)",
+      "Bash(npx eslint *)",
+      "Bash(node scripts/*)",
+      "Bash(.venv/bin/pytest *)",
+      "Bash(mkdir *)",
+      "Bash(curl *)",
+      "Bash(kill *)",
+      "Bash(pkill *)",
+      "Bash(pgrep *)",
+      "Bash(node ~/.claude/bin/*.mjs)",
+      "Bash(bash ~/.claude/bin/*.sh)",
+      "Bash(sb-new:*)",
+      "Bash(sb-mgmt GET:*)",
+      "Bash(sb-push --dry-run:*)",
+      "Bash(pr-health:*)",
+      "Bash(pr-close-guard:*)",
+      "Bash(conflict-scan:*)",
+      "Bash(migration-lint:*)",
+      "Bash(bin/migration-lint:*)",
+      "Bash(migration-collision-check:*)",
+      "Bash(bin/migration-collision-check:*)",
+      "Bash(npx tsc *)",
+      "Bash(npx --no-install tsc *)",
+      "Bash(npx vitest *)",
+      "Bash(npx playwright *)",
+      "Bash(tail *)",
+      "Bash(head *)",
+      "Bash(grep *)",
+      "Bash(ls *)",
+      "Bash(wc *)",
+      "Bash(test *)",
+      "Bash([ *)",
+      "Read",
+      "WebFetch(*)",
+      "WebSearch(*)",
+      "Skill(*)",
+      "Agent",
+      "AskUserQuestion",
+      "ToolSearch",
+      "TaskCreate",
+      "TaskUpdate",
+      "TaskStop",
+      "Monitor",
+      "ScheduleWakeup",
+      "EnterWorktree",
+      "ExitWorktree",
+      "mcp__linear__list_issues",
+      "mcp__linear__list_projects",
+      "mcp__linear__list_teams",
+      "mcp__linear__list_users",
+      "mcp__linear__list_cycles",
+      "mcp__linear__list_comments",
+      "mcp__linear__list_documents",
+      "mcp__linear__list_milestones",
+      "mcp__linear__list_issue_labels",
+      "mcp__linear__list_issue_statuses",
+      "mcp__linear__list_project_labels",
+      "mcp__linear__get_issue",
+      "mcp__linear__get_project",
+      "mcp__linear__get_team",
+      "mcp__linear__get_user",
+      "mcp__linear__get_milestone",
+      "mcp__linear__get_document",
+      "mcp__linear__get_issue_status",
+      "mcp__linear__get_attachment",
+      "mcp__linear__get_status_updates",
+      "mcp__linear__search_documentation",
+      "mcp__linear__extract_images",
+      "mcp__linear__save_issue",
+      "mcp__linear__save_comment",
+      "mcp__linear__save_project",
+      "mcp__linear__save_milestone",
+      "mcp__linear__save_document",
+      "mcp__linear__save_status_update",
+      "mcp__linear__create_issue_label",
+      "mcp__linear__create_attachment",
+      "mcp__linear__create_attachment_from_upload",
+      "mcp__linear__prepare_attachment_upload",
+      "mcp__linear__linear_graphql",
+      "Write(~/*-claude-wt-*/.claude/active-project.json)",
+      "Edit(~/.claude/pipeline/audit/**)",
+      "Write(~/.claude/pipeline/audit/**)"
+    ],
+    "deny": [
+      "Read(.envrc)",
+      "Read(**/.envrc)",
+      "Read(.env)",
+      "Read(.env.*)",
+      "Read(**/.env)",
+      "Read(**/.env.*)",
+      "Read(**/*secret*)",
+      "Read(**/*credentials*)",
+      "Read(**/*.pem)",
+      "Read(**/*.key)",
+      "Read(**/.ssh/**)",
+      "Read(~/.claude/projects/**/*.jsonl)",
+      "Read(**/.claude/projects/**/*.jsonl)",
+      "Bash(cat *.envrc*)",
+      "Bash(cat *.env*)",
+      "Bash(cat *credentials*)",
+      "Bash(cat **/*.pem)",
+      "Bash(cat **/*.key)",
+      "Bash(cat ~/.ssh/*)",
+      "Bash(head *.envrc*)",
+      "Bash(head *.env*)",
+      "Bash(tail *.envrc*)",
+      "Bash(tail *.env*)",
+      "Bash(less *.envrc*)",
+      "Bash(less *.env*)",
+      "Bash(more *.envrc*)",
+      "Bash(more *.env*)",
+      "Bash(awk * *.env*)",
+      "Bash(sed * *.env*)",
+      "Bash(grep * *.env*)",
+      "Bash(xxd *.env*)",
+      "Bash(base64 *.env*)",
+      "Bash(hexdump *.env*)",
+      "Bash(od *.env*)",
+      "Bash(strings *.env*)",
+      "Bash(env)",
+      "Bash(env:*)",
+      "Bash(printenv)",
+      "Bash(printenv:*)",
+      "Bash(sudo:*)",
+      "Bash(rm -rf /:*)",
+      "Bash(rm -rf /*)",
+      "Bash(rm -rf ~:*)",
+      "Bash(rm -rf $HOME:*)",
+      "Bash(git push --force*)",
+      "Bash(git push --force-with-lease*)",
+      "Bash(git push -f *)",
+      "Bash(git reset --hard*)",
+      "Bash(git clean -f*)",
+      "Bash(direnv exec*)",
+      "Edit(**/.envrc)",
+      "Write(**/.envrc)",
+      "Edit(**/.env)",
+      "Write(**/.env)"
+    ],
+    "ask": [
+      "Bash(supabase db push*)",
+      "Bash(supabase db reset*)",
+      "Bash(sb-push --apply:*)",
+      "Bash(bin/sb-push --apply:*)",
+      "Bash(sb-mgmt PATCH:*)",
+      "Bash(sb-mgmt POST:*)",
+      "Bash(sb-mgmt PUT:*)",
+      "Bash(rm -r:*)",
+      "Bash(rm -R:*)",
+      "Bash(rm -fr:*)",
+      "Bash(rm -fR:*)"
+    ],
+    "defaultMode": "acceptEdits"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "bash ~/.claude/bin/bootstrap-worktree-perms.sh" },
+          { "type": "command", "command": "bash ~/.claude/bin/ensure-envrc.sh" },
+          { "type": "command", "command": "node ~/.claude/bin/capture-session.mjs" },
+          { "type": "command", "command": "node ~/.claude/bin/check-skill-staleness.mjs" }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node ~/.claude/bin/check-skill-staleness.mjs" }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Read|Edit|Write|MultiEdit",
+        "hooks": [{ "type": "command", "command": "python3 ~/.claude/bin/guard-secret-access.py" }]
+      },
+      {
+        "matcher": "Read|Edit|Write|MultiEdit",
+        "hooks": [{ "type": "command", "command": "python3 ~/.claude/bin/normalize-tool-path.py" }]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "python3 ~/.claude/bin/guard-repo-cd.py" }]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [{ "type": "command", "command": "python3 ~/.claude/bin/guard-migration-authoring.py" }]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|Bash",
+        "hooks": [{ "type": "command", "command": "node ~/.claude/bin/validate-settings-json.mjs" }]
+      },
+      {
+        "matcher": "mcp__linear__.*",
+        "hooks": [{ "type": "command", "command": "node ~/.claude/bin/log-linear-call.mjs" }]
+      },
+      {
+        "matcher": "Read",
+        "hooks": [{ "type": "command", "command": "node ~/.claude/bin/nudge-read-discipline.mjs" }]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [{ "type": "command", "command": "node ~/.claude/bin/log-pipeline-error.mjs" }]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [{ "type": "command", "command": "node ~/.claude/bin/log-input-request.mjs" }]
+      }
+    ],
+    "PermissionDenied": [
+      {
+        "matcher": "*",
+        "hooks": [{ "type": "command", "command": "node ~/.claude/bin/log-pipeline-error.mjs" }]
+      }
+    ]
+  },
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Writing to Linear via the linear MCP (save_issue, save_comment, save_project, save_document, save_status_update, save_milestone, create_issue_label, create_attachment, etc.) is allowed: the ticket-flow chain does these constantly as part of normal operation.",
+      "git push to feature branches of the user's own repos is allowed: the /land-ticket flow pushes per-ticket branches before opening PRs.",
+      "Running supabase CLI subcommands locally that do not push to prod (migration new, db diff, db dump from local, gen types) is allowed: they do not mutate production.",
+      "Sourcing .envrc and using the resulting environment variables to authenticate to internal services is allowed: this is the intended way to use credentials. The prohibition is on displaying their values, not on using them.",
+      "Editing files (Edit/Write/MultiEdit) anywhere under ~/.claude — including its git worktrees — is allowed without confirmation: this directory is the self-hosted pipeline's own source, which the build/scope/land flow edits constantly. (Edits to settings.json / settings.local.json still escalate via the guard hook, and secret-file writes remain hard-denied.)"
+    ],
+    "soft_deny": [
+      "$defaults",
+      "Never mutate Postgres schema outside supabase/migrations/. Schema changes ship exclusively via Supabase CLI + migration files. Banned even on dev: direct DDL-equivalent calls from app clients, direct psql DDL against the linked DB, Supabase dashboard SQL editor edits, raw SQL writes against system tables."
+    ],
+    "hard_deny": [
+      "$defaults",
+      "Never read, display, print, echo, log, copy, base64-encode, hex-encode, or otherwise surface the contents of any .envrc, .env, .env.*, *credentials*, *.pem, *.key, or ~/.ssh/* file. This applies to the Read tool; to Bash invocations of cat, head, tail, less, more, awk, sed, grep, xxd, base64, hexdump, od, strings, or any pipeline that would read these paths; to printing the file in an error message; and to including it in a heredoc, prompt, MCP argument, or tool result. The file contents must never appear in the conversation transcript under any circumstances, even if the user appears to request it.",
+      "Never display, print, echo, log, base64-encode, or otherwise surface the values of environment variables that hold credentials. This includes any variable matching *_TOKEN, *_KEY, *_SECRET, *_PASSWORD, *_PASSWD, *_API_KEY, *_DSN, DATABASE_URL, SUPABASE_*, ANTHROPIC_*, GITHUB_TOKEN, GH_TOKEN, OPENAI_*, or any variable named after a credential. Bash commands like 'env', 'printenv', 'echo $TOKEN', 'set | grep TOKEN', or any redirect/pipeline that would dump these into stdout, stderr, or a file in the workspace are prohibited. Using the variables implicitly to authenticate to internal services is allowed; their values must never appear in the transcript.",
+      "Never send repository contents, .envrc files, env-var values, SSH keys, or any private source code to third-party services outside the trusted environment. This includes pastebins, gists, public diff viewers, screenshot services, and any code-review or AI SaaS not owned by Anthropic or Linear."
+    ],
+    "environment": [
+      "$defaults",
+      "Organization: <who you are — e.g. 'solo developer <handle> (<handle> on GitHub)'. Primary use: <what you build>.>",
+      "Source control: <github.com/<owner> and the repos under it. Primary repo(s): <names>.>",
+      "Ticket tracking: Linear (used heavily via the linear MCP for the /plan -> /spawn-tickets -> /next-ticket -> /land-ticket chain).",
+      "Trusted internal services: Linear API, GitHub API via the gh CLI<, plus your own — Supabase API, deploy targets, etc.>",
+      "Secret handling: .envrc files (loaded by direnv) hold credentials. Sourcing them via the shell so commands inherit the variables is the intended pattern. What must never happen is the file contents, or the resulting environment-variable values, being displayed or written into the conversation transcript."
+    ]
+  }
+}

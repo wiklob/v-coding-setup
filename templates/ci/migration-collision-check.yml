@@ -1,0 +1,55 @@
+# migration-collision-check.yml — CI guard against Supabase migration-prefix collisions (V-330).
+#
+# ADOPTION: copy this file into a client repo at `.github/workflows/migration-collision-check.yml`.
+# It is self-contained — it needs no ~/.claude and no external action. If the repo also vendors
+# `bin/migration-collision-check` (from the V pipeline) it runs the fuller guard; otherwise it
+# runs the inline minimal core the acceptance names (`cut -c1-14 | sort | uniq -d`). See
+# `docs/migration-collision-guard.md` for the three-layer model this closes.
+#
+# Why CI, when land + the authoring hook already guard? Git computes per-PR mergeability against
+# pristine `main` only — two open PRs with the SAME YYYYMMDDHHMMSS prefix on DISTINCT filenames
+# both show MERGEABLE, and the clash detonates at `db push`/`db reset` (the prefix is the PK in
+# schema_migrations). This job re-checks the MERGE RESULT (the PR merged into base) server-side,
+# so a collision blocks the PR check even if a local land guard was bypassed.
+
+name: migration-collision-check
+
+on:
+  pull_request:
+    paths:
+      - "supabase/migrations/**"
+
+jobs:
+  collision-check:
+    runs-on: ubuntu-latest
+    steps:
+      # Default checkout for a pull_request event resolves to the PR-merged-into-base ref
+      # (refs/pull/<n>/merge), so `supabase/migrations/` below IS the merge result.
+      - uses: actions/checkout@v4
+
+      - name: Check migration prefixes on the merge result
+        run: |
+          set -euo pipefail
+          migdir="supabase/migrations"
+          if [ ! -d "$migdir" ]; then
+            echo "no $migdir/ — nothing to check"; exit 0
+          fi
+
+          # Prefer the vendored guard (fuller: names offenders, ordering-aware) if present.
+          if [ -x bin/migration-collision-check ]; then
+            echo "running vendored bin/migration-collision-check"
+            exec bin/migration-collision-check --dir "$migdir"
+          fi
+
+          # Inline minimal core (the acceptance's `cut -c1-14 | sort | uniq -d` must be empty).
+          echo "running inline duplicate-prefix core"
+          dups="$(ls "$migdir" 2>/dev/null | grep -E '^[0-9]{14}_' | cut -c1-14 | sort | uniq -d || true)"
+          if [ -n "$dups" ]; then
+            echo "::error::duplicate migration prefix(es) in the merge result:"
+            for d in $dups; do
+              echo "::error::  prefix $d borne by: $(ls "$migdir" | grep -E "^${d}_" | tr '\n' ' ')"
+            done
+            echo "Two migrations share a YYYYMMDDHHMMSS prefix — re-mint the later one via sb-new and repush."
+            exit 1
+          fi
+          echo "no duplicate migration prefixes in the merge result"

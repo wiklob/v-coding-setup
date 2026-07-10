@@ -10,7 +10,7 @@ Runs the project's checks against what the current branch actually changed. Desi
 
 Read `~/.claude/workflow-conventions.md` first. Standalone command — runs between build and `/land-ticket`. May be invoked from `/build`. Exits with a clear `result:` line; downstream skills can consume that.
 
-> Blind on *why* something failed at runtime (auth flow, migration/RLS, worker, e2e)? → `log-reading-playbook.md` maps situation → log source → exact read-only command (Supabase / Netlify / Hetzner / Loki / Playwright).
+> Blind on *why* something failed at runtime (auth flow, migration/RLS, worker, e2e)? → consult your product's log-reading playbook (a per-product doc mapping situation → log source → exact read-only command), if one exists.
 
 ## Hard cost rules — the green path stays cheap
 

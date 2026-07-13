@@ -1,6 +1,6 @@
 # v-coding-setup — build plan
 
-Open-source extraction of the "v pipeline": an autonomous dev pipeline built on Claude Code (skills, hooks/guards, scheduled rituals, Linear ticket flow, markdown-in-git knowledge base). Source being ported: the git-tracked subset of `~/.claude` (private repo `wiklob/v`, 424 tracked files, 762 commits).
+Open-source extraction of the "v pipeline": an autonomous dev pipeline built on Claude Code (skills, hooks/guards, scheduled rituals, Linear ticket flow, markdown-in-git knowledge base). Source being ported: the git-tracked subset of `~/.claude` (private repo `github.com/wiklob/v`, 424 tracked files, 762 commits).
 
 ## Working model (how this repo is built)
 
@@ -19,28 +19,28 @@ Open-source extraction of the "v pipeline": an autonomous dev pipeline built on 
 | GitHub | Created private immediately; flips public only after the Phase-C clean-room audit |
 | History | Fresh (orphan root). Optional: hand-written `HISTORY.md` narrating the 762-commit self-development arc |
 | License | MIT, `Copyright (c) 2026 wiklob` (matches linear-mcp-lean) |
-| cbapp/Supabase | **Revised at port (2026-07-10):** the `sb-*` helpers turned out to be fully generic, env-var-driven Supabase tooling (the "cbapp-specific" premise was wrong) and are deeply cross-referenced by guards/commands/CI — the whole Supabase module ships. Only `relocate-cbapp.sh` (genuinely product-specific) is stripped. |
+| product-app/Supabase | **Revised at port (2026-07-10):** the `sb-*` helpers turned out to be fully generic, env-var-driven Supabase tooling (the "product-specific" premise was wrong) and are deeply cross-referenced by guards/commands/CI — the whole Supabase module ships. Only the product-relocation helper (genuinely product-specific) is stripped. |
 | v1 scope | Claude Code + Linear + macOS/launchd are **documented prerequisites**, not abstracted away |
 
 ## Source analysis (done 2026-07-10)
 
 - **No live secrets** in any tracked file or anywhere in the 762-commit history (verified: `.credentials.json`/`.envrc` never committed; no token patterns in history).
 - The risk is **identity/infra disclosure**, concentrated in engine files (see scrub list).
-- The engine/state boundary in the source is clean; most personal fingerprint (182 `linear.app/wiklob` URLs, hundreds of V-/CB- ticket refs) lives in state files that don't ship.
+- The engine/state boundary in the source is clean; most personal fingerprint (182 workspace-URL references, hundreds of V-/CB- ticket refs) lives in state files that don't ship.
 
 ### Scrub list (becomes the CI grep-gate)
 
-`wiklob` · `Wiktor` · `178.104.140.96` · `linear-mcp.wiklob.dev` · `linear.app/wiklob` · Linear UUIDs (63 in source, incl. `ticket-flow.json` buckets) · `com.wiklob.claude.*` launchd labels (74×) · `cbapp` / `/opt/cbapp` (62 files) · `/Users/wiklob` hardcoded paths (142×, worst: `settings.json` with 22, `bin/check-no-hardcoded-repo-cd.sh`, `bin/probe-claude-gate.sh`, guard test fixtures) · Supabase project details · `~/.ssh/id_ed25519` references.
+the author's handle and full name · the VPS IP · the personal domain · the Linear workspace URL · Linear UUIDs (63 in source, incl. `ticket-flow.json` buckets) · `com.<handle>.claude.*` launchd labels (74×) · the product app's name (62 files) · `/Users/<handle>` hardcoded paths (142×, worst: `settings.json` with 22, `bin/check-no-hardcoded-repo-cd.sh`, `bin/probe-claude-gate.sh`, guard test fixtures) · Supabase project details · SSH key-path references. (Literal values live in the private source repo's copy of this plan.)
 
 ## What ships — port checklist
 
-- [x] **bin/** (103 files, done 2026-07-10): all guards/hooks/loggers/runners/installers/helpers + test suite ported. Genericized: launchd labels → `com.v-coding-setup.*`; `LINEAR_MCP_WRAPPER_URL` env replaces the hardcoded wrapper URL; `check-no-hardcoded-repo-cd.sh` + `probe-claude-gate.sh` derive patterns from `$HOME`/ticket-flow at runtime; `guard-repo-cd.test.sh` rewritten hermetic (sandbox HOME + checkout); `git-hygiene-runner.sh` reads extra repos from optional `~/.claude/git-hygiene-repos.txt`; fixtures → `/Users/testuser`/`myapp`. Stripped: `relocate-cbapp.sh` only (sb-* kept — see decision). Gate: 33/33 tests + 2 probes green.
+- [x] **bin/** (103 files, done 2026-07-10): all guards/hooks/loggers/runners/installers/helpers + test suite ported. Genericized: launchd labels → `com.v-coding-setup.*`; `LINEAR_MCP_WRAPPER_URL` env replaces the hardcoded wrapper URL; `check-no-hardcoded-repo-cd.sh` + `probe-claude-gate.sh` derive patterns from `$HOME`/ticket-flow at runtime; `guard-repo-cd.test.sh` rewritten hermetic (sandbox HOME + checkout); `git-hygiene-runner.sh` reads extra repos from optional `~/.claude/git-hygiene-repos.txt`; fixtures → `/Users/testuser`/`myapp`. Stripped: the product-relocation helper only (sb-* kept — see decision). Gate: 33/33 tests + 2 probes green.
 - [x] **commands/** (46 skills, done 2026-07-10) — scrubbed; refresh-landscape/trace-audit teams → `cfg.landscapeTeams`, capture/align funnel → `cfg.intake`, examples → placeholders.
 - [x] **craft/**, **memory/**, **templates/**, **scripts/** (done 2026-07-10) — ported byte-identical, scrub-clean.
 - [x] **pipeline/** (done 2026-07-10): mechanism ported scrubbed (README, principles w/ seed-example note, owed read-schema, review-standard, decision-ledger emptied, profiles/, audit/README); KB content files ship as blank templates; `schedule-registry.json` = `[]`. Audit findings docs excluded.
 - [x] **Root convention docs** (done 2026-07-10): `workflow-conventions.md`, `workflow-chains.md`, `commands-reference.md`, `usage-stats.md`, `screenshot-recipe.md` — scrubbed. `log-reading-playbook.md` EXCLUDED (personal-infra runbook; the pattern is noted as per-product).
 - [x] **engine docs** (done 2026-07-10): 12 curated into `docs/` (all engine-cited docs + Decision docs: implementation-design-rung, research-route/fix-bug path designs, stale-skill-execution, design-is-upstream, autonomous-go-class, git-hygiene, migration-collision-guard, large-build-context-budget, craft-ab-harness, v-174 token-cost, v-194 repro script) — scrubbed/de-linked. Dated findings + security baseline excluded.
-- [x] **settings.example.json** (done 2026-07-10): hooks (all `~/.claude/bin/...`), generic permissions (identity block, VPS/ssh rule, product rules stripped; bare-verb ask-gates added), autoMode with placeholder environment block. Installer merges/copies with backup — never clobbers.
+- [x] **settings.example.json** (done 2026-07-10): hooks (all `~/.claude/bin/...`), generic permissions (identity block, VPS/ssh rule, product rules stripped; bare-verb ask-gates added; the source's broad `Bash(*)` allow deliberately NOT shipped — curated allows instead), autoMode with placeholder environment block. Installer merges/copies with backup — never clobbers.
 - [x] **CLAUDE.example.md** (done 2026-07-10) — terseness + bash-call discipline + ugrep (made conditional) + literal tool paths.
 - [x] **`.claude/ticket-flow.example.json`** (done 2026-07-10) — full schema incl. new `landscapeTeams` + `intake` keys, placeholder values, generic notes; no real UUIDs.
 - [ ] **Excluded entirely**: `docs/plans/*-build.md` (166 per-ticket artifacts), `plans/` (21 strategy docs), `pipeline/audit/` content, `pipeline-status.md`, `commands-rework-agenda.md`, `usage-stats.md`-style trackers' *content*, `services/linear-mcp/` (superseded → README pointer to linear-mcp-lean). Optionally 1–2 build plans return later, genericized, as worked examples.

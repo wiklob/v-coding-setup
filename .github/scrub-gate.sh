@@ -10,9 +10,10 @@
 #           links), and docs/plan.md (the build plan documents the extraction),
 #           and only as part of a github.com/<handle>/ URL or the copyright line.
 #
-# Self-exclusions: this file (it names the strings it hunts) and docs/plan.md
-# (the extraction plan enumerates the scrub list by design — decide at launch
-# whether it ships or moves out).
+# Self-exclusion: this file (it names the strings it hunts). docs/plan.md is
+# hard-tier scanned like everything else (its scrub-list section was sanitized
+# to placeholders); it stays soft-exempt for the bare handle (license row,
+# source-repo link).
 #
 # Usage:  bash .github/scrub-gate.sh   (from the repo root)
 # Exit:   0 = clean, 1 = hits found, 2 = probe error.
@@ -36,7 +37,7 @@ HARD=(
 fail=0
 
 for s in "${HARD[@]}"; do
-  hits="$(grep -rniF --exclude-dir=.git --exclude=.git --exclude=scrub-gate.sh --exclude=plan.md -e "$s" . 2>/dev/null || true)"
+  hits="$(grep -rniF --exclude-dir=.git --exclude=.git --exclude=scrub-gate.sh -e "$s" . 2>/dev/null || true)"
   if [ -n "$hits" ]; then
     echo "SCRUB HIT (hard) — '$s':"
     printf '%s\n' "$hits"

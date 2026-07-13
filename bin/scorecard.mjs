@@ -141,9 +141,9 @@ function buildSessionTicketMap(stats) {
 
 // Parse gate-audit.md into per-run blocks: {ticket, stamp, outcome, pd, intervened,
 // forced, gates:[{key, resolution, raw}]}.
-function parseGateAudit() {
-  if (!existsSync(P.gateAudit)) return [];
-  const text = readFileSync(P.gateAudit, "utf8");
+function parseGateAudit(path = P.gateAudit) {
+  if (!existsSync(path)) return [];
+  const text = readFileSync(path, "utf8");
   const blocks = [];
   let cur = null;
   for (const line of text.split("\n")) {

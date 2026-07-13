@@ -32,7 +32,7 @@ Around the V, **standing machinery**: every tool failure lands in an errors log 
 - **A Linear workspace** — Linear is the ticket DB and trace backbone. Recommended: the token-frugal self-hosted MCP wrapper [linear-mcp-lean](https://github.com/wiklob/linear-mcp-lean) (same author); the hosted `mcp.linear.app` works too.
 - **macOS** for the scheduled rituals (launchd). Everything else is POSIX-portable; systemd units are a welcome contribution.
 - `node` ≥ 18, `python3`, `git`, `gh`, `jq`, `direnv`; bash ≥ 4 for a few scripts (`brew install bash`).
-- Optional: Supabase CLI (the migration-safety module no-ops without a `supabase/` dir).
+- Optional: Supabase CLI + `squawk-cli` (the migration-safety module no-ops without a `supabase/` dir; squawk is needed by `migration-lint` and its tests).
 
 ## Quickstart
 

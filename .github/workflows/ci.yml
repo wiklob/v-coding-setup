@@ -14,6 +14,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: Install squawk (migration-lint / sb-push test dependency)
+        run: npm install -g squawk-cli
       - name: Run suite
         run: bash bin/run-tests.sh -q
 
@@ -26,12 +28,16 @@ jobs:
         run: bash .github/scrub-gate.sh
 
   secret-scan:
-    name: gitleaks (no committed secrets)
+    name: gitleaks (full-history, no committed secrets)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Direct invocation, not gitleaks-action: the action range-scans the push
+      # (and errors on a push containing the parentless root commit); a full
+      # history scan is the assurance this repo actually wants.
+      - name: Run gitleaks over the full history
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz | tar xz -C /tmp gitleaks
+          /tmp/gitleaks detect --source . --redact

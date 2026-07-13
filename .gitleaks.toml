@@ -1,0 +1,10 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic secrets used as fixtures by the redaction/logging test suite (bin/*.test.*) — they exist to prove redact() masks exactly these shapes. Never allowlist non-test paths here."
+paths = [
+  '''bin/[^/]*\.test\.mjs$''',
+  '''bin/[^/]*\.test\.sh$''',
+  '''bin/[^/]*\.test\.py$''',
+]

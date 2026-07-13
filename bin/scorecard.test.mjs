@@ -59,10 +59,27 @@ function check(name, cond) {
   check("a primary still outranks another ticket's name-drop", m.get("p20") === "V-20" && m.get("p21") === "V-21");
 }
 
-// --- parseGateAudit on the real file: shape + the §-dedup invariant ---
+// --- parseGateAudit on a fixture file: shape + the §-dedup invariant ---
+// Hermetic: the fixture reproduces both on-disk gate-line formats, a letter-
+// suffixed section marker, and a preserved intervention — the exact shapes the
+// original machine's live gate-audit.md exercised.
 {
-  const blocks = parseGateAudit();
-  // The real gate-audit.md always has ≥1 run; each block must carry the shape.
+  const gaDir = mkdtempSync(join(tmpdir(), "scorecard-ga-"));
+  const gaPath = join(gaDir, "gate-audit.md");
+  writeFileSync(gaPath, [
+    "## 2026-06-21 14:05 — CB-160 (completed)",
+    "- land-ticket · §5 · merge confirm — p'd",
+    "- land-ticket §6.7 · redeploy ack — intervened",
+    "- land-ticket §1.C · branch guard — forced",
+    "Tallies: p'd 1 · intervened 1 · forced 1",
+    "",
+    "## 2026-06-22 09:00 — V-999 (completed)",
+    "- land-ticket §5 · merge confirm — p'd",
+    "Tallies: p'd 1 · intervened 0 · forced 0",
+    "",
+  ].join("\n"));
+  const blocks = parseGateAudit(gaPath);
+  // The fixture has ≥1 run; each block must carry the shape.
   check(
     "parseGateAudit returns well-formed blocks from the real file",
     Array.isArray(blocks) &&
@@ -79,9 +96,8 @@ function check(name, cond) {
   // leave no trailing-dot artifact ("§1." would drop the C and split the gate).
   check("no gate key has a trailing-dot section artifact", !keys.some((k) => /§[\d.]*\.$/.test(k)));
 
-  // Both real land-ticket confirm gates resolve to their canonical single key,
-  // and §6.7 retains its real intervention (the CB-160 run) — proving the merge
-  // didn't drop data.
+  // Both land-ticket confirm-gate formats resolve to their canonical single
+  // key, and §6.7 retains its intervention — proving the merge didn't drop data.
   const sixSeven = blocks.flatMap((b) => b.gates).filter((g) => g.key === "land-ticket §6.7" && g.resolution);
   check("land-ticket §6.7 is a real, single key with ≥1 intervention preserved", sixSeven.some((g) => g.resolution === "intervened"));
 }

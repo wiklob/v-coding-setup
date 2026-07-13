@@ -100,7 +100,9 @@ is_allowed() {
   local a; for a in "${allow_embed[@]}"; do [[ "$b" == "$a" ]] && return 0; done
   return 1
 }
-mapfile -t files < <(
+# bash-3.2-compatible (macOS /bin/bash has no mapfile).
+files=()
+while IFS= read -r f; do files+=("$f"); done < <(
   find "$ROOT/commands" -type f -name '*.md' 2>/dev/null
   find "$ROOT/bin" -type f 2>/dev/null
 )

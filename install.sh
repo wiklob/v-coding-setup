@@ -134,6 +134,10 @@ say "  5. Per-repo ticket flow — in each repo you work on, run /ticket-flow-in
 say "     .claude/ticket-flow.example.json to <repo>/.claude/ticket-flow.json and fill it in)."
 say ""
 say "  6. Seed the KB — edit $TARGET/pipeline/objectives.md (+ principles.md), then /refresh-landscape."
+say ""
+say "  7. Multi-model (optional) — cp model-routes.example.json $TARGET/model-routes.json, then"
+say "     'claude-via <route>' launches Claude Code on that model (proxy for non-Anthropic ones)."
+say "     See docs/multi-model-support.md."
 if [ "$dry" -eq 1 ]; then
   say ""
   say "(dry run — nothing was changed)"

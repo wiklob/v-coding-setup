@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+# claude-via — launch Claude Code with a named model route (multi-model support).
+#
+# Claude Code is the harness; the model behind it is swappable — natively for
+# Claude models, and for any other provider through a Claude-API-compatible
+# proxy (e.g. CLIProxyAPI) that serves the Anthropic Messages surface. This verb
+# is the generalized "claudex alias": it resolves a route, composes the env, and
+# execs `claude --model …`. See docs/multi-model-support.md.
+#
+# Usage:
+#   claude-via <route|model-id> [claude args…]   # launch via a route, or a literal model id
+#   claude-via --list                            # show configured routes
+#   claude-via --help
+#
+# Routes file: $CLAUDE_CONFIG_DIR/model-routes.json (default ~/.claude/model-routes.json),
+# seeded from model-routes.example.json. Schema per route:
+#   { "model": "<id claude is launched with>",
+#     "baseUrl": "<proxy URL — sets ANTHROPIC_BASE_URL; omit for Anthropic-native models>",
+#     "subagentModel": "<optional; defaults to model — subagents on a proxied model MUST
+#                        stay on-proxy, or their calls hit Anthropic with a foreign id>",
+#     "env": { "<extra CLAUDE_CODE_* / ENABLE_* knobs>": "<value>" } }
+# An argument matching no route is used as a literal model id (no proxy env).
+#
+# Secrets: the proxy token is NEVER stored here or in the routes file — export
+# ANTHROPIC_AUTH_TOKEN via ~/.claude/.envrc (direnv), the same pattern every
+# credential in this setup follows. A tokenless local proxy needs nothing.
+#
+# Convention 12: each model you run should have a posture profile at
+# pipeline/profiles/<model>.md; without one, sessions fall back to the
+# conservative default (opus-4-8.md — more rails, never fewer). This launcher
+# warns when the profile is missing; it never blocks.
+#
+# Exit: 0 launched/listed · 1 routes file invalid / bad route · 3 bad args.
+set -euo pipefail
+
+CFG="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+ROUTES="$CFG/model-routes.json"
+CLAUDE_BIN="${CLAUDE_BIN:-claude}"
+
+usage() { sed -n '2,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+
+[ $# -ge 1 ] || { usage; exit 3; }
+
+case "$1" in
+  --help|-h) usage; exit 0 ;;
+  --list)
+    if [ ! -f "$ROUTES" ]; then
+      echo "claude-via: no routes file at $ROUTES"
+      echo "  seed it from model-routes.example.json in the v-coding-setup checkout"
+      exit 0
+    fi
+    node -e '
+      const cfg = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+      const routes = cfg.routes || {};
+      const names = Object.keys(routes);
+      if (!names.length) { console.log("(no routes configured)"); process.exit(0); }
+      for (const n of names) {
+        const r = routes[n];
+        console.log(`${n.padEnd(16)} → ${r.model}${r.baseUrl ? "   via " + r.baseUrl : "   (Anthropic-native)"}`);
+      }
+    ' "$ROUTES" || { echo "claude-via: $ROUTES is not valid JSON" >&2; exit 1; }
+    exit 0
+    ;;
+  --*) echo "claude-via: unknown flag $1" >&2; exit 3 ;;
+esac
+
+ROUTE="$1"; shift
+
+MODEL=""
+BASE_URL=""
+SUBAGENT=""
+env_args=()
+
+resolved=""
+if [ -f "$ROUTES" ]; then
+  # Resolve the route in node (stdlib-only), emit TAB-separated key/value lines.
+  # Exit 4 = route not found (fall through to literal-model mode); 1 = invalid.
+  set +e
+  resolved="$(node -e '
+    const fs = require("fs");
+    const [file, name] = process.argv.slice(1);
+    let cfg;
+    try { cfg = JSON.parse(fs.readFileSync(file, "utf8")); }
+    catch (e) { console.error(`claude-via: ${file} is not valid JSON: ${e.message}`); process.exit(1); }
+    const r = (cfg.routes || {})[name];
+    if (!r) process.exit(4);
+    if (!r.model) { console.error(`claude-via: route "${name}" has no "model"`); process.exit(1); }
+    const out = [];
+    const push = (k, v) => {
+      v = String(v);
+      if (/[\n\t\r]/.test(v)) { console.error(`claude-via: control characters in route value for ${k}`); process.exit(1); }
+      out.push(`${k}\t${v}`);
+    };
+    push("MODEL", r.model);
+    if (r.baseUrl) push("BASE_URL", r.baseUrl);
+    push("SUBAGENT", r.subagentModel || r.model);
+    for (const [k, v] of Object.entries(r.env || {})) {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) { console.error(`claude-via: bad env key ${k}`); process.exit(1); }
+      push(`ENV:${k}`, v);
+    }
+    process.stdout.write(out.join("\n"));
+  ' "$ROUTES" "$ROUTE")"
+  rc=$?
+  set -e
+  if [ "$rc" -eq 1 ]; then exit 1; fi
+  if [ "$rc" -ne 0 ] && [ "$rc" -ne 4 ]; then exit 1; fi
+  if [ "$rc" -eq 0 ]; then
+    while IFS=$'\t' read -r k v; do
+      case "$k" in
+        MODEL)    MODEL="$v" ;;
+        BASE_URL) BASE_URL="$v" ;;
+        SUBAGENT) SUBAGENT="$v" ;;
+        ENV:*)    env_args+=("${k#ENV:}=$v") ;;
+      esac
+    done <<< "$resolved"
+  fi
+fi
+
+if [ -z "$MODEL" ]; then
+  # No route matched — treat the argument as a literal model id, no proxy env.
+  MODEL="$ROUTE"
+  SUBAGENT="$ROUTE"
+fi
+
+[ -n "$BASE_URL" ] && env_args+=("ANTHROPIC_BASE_URL=$BASE_URL")
+env_args+=("CLAUDE_CODE_SUBAGENT_MODEL=$SUBAGENT")
+
+if [ -n "$BASE_URL" ] && [ -z "${ANTHROPIC_AUTH_TOKEN:-}" ]; then
+  echo "claude-via: note — ANTHROPIC_AUTH_TOKEN is not set; fine for a tokenless local proxy," >&2
+  echo "            otherwise export it via ~/.claude/.envrc (never store it in the routes file)." >&2
+fi
+
+if [ ! -f "$CFG/pipeline/profiles/$MODEL.md" ]; then
+  echo "claude-via: no posture profile at pipeline/profiles/$MODEL.md — sessions fall back to" >&2
+  echo "            the conservative default (opus-4-8.md). Author one per pipeline/profiles/README.md." >&2
+fi
+
+echo "claude-via: launching $CLAUDE_BIN --model $MODEL${BASE_URL:+ via $BASE_URL} (subagents: $SUBAGENT)" >&2
+exec env "${env_args[@]}" "$CLAUDE_BIN" --model "$MODEL" "$@"

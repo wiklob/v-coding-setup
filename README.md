@@ -73,6 +73,18 @@ bash bin/run-tests.sh        # 35 test files + self-testing probes
 bash .github/scrub-gate.sh   # the no-personal-strings gate
 ```
 
+## Multi-model support
+
+The pipeline is harness-bound (Claude Code), **not** model-bound. `bin/claude-via` launches Claude Code with a named model route — Anthropic-native, or any provider behind a Claude-API-compatible proxy (e.g. CLIProxyAPI):
+
+```bash
+cp model-routes.example.json ~/.claude/model-routes.json   # edit routes
+claude-via sol            # e.g. GPT via your proxy; subagents follow the route model
+claude-via --list
+```
+
+The proxy token goes in `~/.claude/.envrc` (`ANTHROPIC_AUTH_TOKEN`), never in config. Per convention 12, author a posture profile (`pipeline/profiles/<model>.md`) for each model you run — until then sessions use the conservative default. Details + caveats: [docs/multi-model-support.md](docs/multi-model-support.md).
+
 ## Relationship to linear-mcp-lean
 
 The pipeline drives Linear hard, so it pairs with [linear-mcp-lean](https://github.com/wiklob/linear-mcp-lean) — a self-hosted Linear MCP server with byte-trimmed reads and minimal write acks. `bin/linear-wrapper-toggle.mjs` routes the `linear` MCP server between your wrapper deployment (`LINEAR_MCP_WRAPPER_URL`) and the hosted endpoint, globally or per-path.

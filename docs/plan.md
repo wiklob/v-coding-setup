@@ -53,6 +53,8 @@ the author's handle and full name · the VPS IP · the personal domain · the Li
 
 **C — Launch.** Clean-room install test (fresh account/VM); empirical scrub probe of the published tree (grep the scrub list — probe, don't trust artifact presence); flip repo public; description/topics; optional demo recording.
 
+**Post-audit addition (2026-07-13) — multi-model support.** `bin/claude-via` (+ hermetic test): launch Claude Code on a named model route — Anthropic-native or any provider behind a Claude-API-compatible proxy; routes in `~/.claude/model-routes.json` (example shipped), proxy token via `.envrc`, subagents default to the route model, convention-12 profile warning. `docs/multi-model-support.md` + README section.
+
 **D — (Deferred, post-build, separate decision.)** Migrate the live `~/.claude` to install-from-this-repo; shrink `wiklob/v` to state-only or archive it.
 
 ## Prerequisites (v1, documented not abstracted)

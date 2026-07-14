@@ -8,7 +8,8 @@
 #   HARD  — never allowed anywhere in the tree.
 #   SOFT  — the bare author handle: allowed only in LICENSE, README.md (repo
 #           links), and docs/plan.md (the build plan documents the extraction),
-#           and only as part of a github.com/<handle>/ URL or the copyright line.
+#           and only as part of a github.com/<handle>/ URL, the @<handle>/ npm
+#           scope of the sibling claude-model-router package, or the copyright line.
 #
 # Self-exclusion: this file (it names the strings it hunts). docs/plan.md is
 # hard-tier scanned like everything else (its scrub-list section was sanitized
@@ -51,7 +52,8 @@ soft_hits="$(grep -rniF --exclude-dir=.git --exclude=.git -e "wiklob" . 2>/dev/n
   | grep -v '^\./README.md:' \
   | grep -v '^\./docs/plan.md:' \
   | grep -v '^\./\.github/scrub-gate.sh:' \
-  | grep -v 'github\.com/wiklob/' || true)"
+  | grep -v 'github\.com/wiklob/' \
+  | grep -v '@wiklob/claude-model-router' || true)"
 if [ -n "$soft_hits" ]; then
   echo "SCRUB HIT (soft — bare handle outside LICENSE/README/docs/plan.md):"
   printf '%s\n' "$soft_hits"

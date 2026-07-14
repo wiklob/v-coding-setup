@@ -135,9 +135,9 @@ say "     .claude/ticket-flow.example.json to <repo>/.claude/ticket-flow.json an
 say ""
 say "  6. Seed the KB — edit $TARGET/pipeline/objectives.md (+ principles.md), then /refresh-landscape."
 say ""
-say "  7. Multi-model (optional) — cp model-routes.example.json $TARGET/model-routes.json, then"
-say "     'claude-via <route>' launches Claude Code on that model (proxy for non-Anthropic ones)."
-say "     See docs/multi-model-support.md."
+say "  7. Multi-model (optional) — npm install -g @wiklob/claude-model-router && model-router install-launchd,"
+say "     then point sessions at it in settings.json:  \"env\": { \"ANTHROPIC_BASE_URL\": \"http://localhost:8399\" }"
+say "     Model per conversation: 'claude --model <id>' or '/model <id>'. See docs/multi-model-support.md."
 if [ "$dry" -eq 1 ]; then
   say ""
   say "(dry run — nothing was changed)"

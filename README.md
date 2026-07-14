@@ -75,15 +75,16 @@ bash .github/scrub-gate.sh   # the no-personal-strings gate
 
 ## Multi-model support
 
-The pipeline is harness-bound (Claude Code), **not** model-bound. `bin/claude-via` launches Claude Code with a named model route — Anthropic-native, or any provider behind a Claude-API-compatible proxy (e.g. CLIProxyAPI):
+The pipeline is harness-bound (Claude Code), **not** model-bound. Model routing lives in a standalone sibling tool, [claude-model-router](https://github.com/wiklob/claude-model-router) — a tiny loopback router for the Anthropic API surface that forwards each request to the upstream serving its model id: `claude-*` passes through to Anthropic with your auth untouched; foreign ids go to a translating proxy of your choice (e.g. CLIProxyAPI).
 
 ```bash
-cp model-routes.example.json ~/.claude/model-routes.json   # edit routes
-claude-via sol            # e.g. GPT via your proxy; subagents follow the route model
-claude-via --list
+npm install -g @wiklob/claude-model-router
+model-router install-launchd     # daemon on localhost:8399, survives reboots
 ```
 
-The proxy token goes in `~/.claude/.envrc` (`ANTHROPIC_AUTH_TOKEN`), never in config. Per convention 12, author a posture profile (`pipeline/profiles/<model>.md`) for each model you run — until then sessions use the conservative default. Details + caveats: [docs/multi-model-support.md](docs/multi-model-support.md).
+Point every session at it once — in `~/.claude/settings.json`: `"env": { "ANTHROPIC_BASE_URL": "http://localhost:8399" }`. Model choice is then per-conversation from any launcher (terminal, agents view, background jobs): `claude --model <id>` at launch or `/model <id>` mid-session.
+
+Per convention 12, author a posture profile (`pipeline/profiles/<model>.md`) for each model you run — until then sessions use the conservative default. Details + caveats: [docs/multi-model-support.md](docs/multi-model-support.md).
 
 ## Relationship to linear-mcp-lean
 

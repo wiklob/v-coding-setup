@@ -55,6 +55,8 @@ the author's handle and full name · the VPS IP · the personal domain · the Li
 
 **Post-audit addition (2026-07-13) — multi-model support.** `bin/claude-via` (+ hermetic test): launch Claude Code on a named model route — Anthropic-native or any provider behind a Claude-API-compatible proxy; routes in `~/.claude/model-routes.json` (example shipped), proxy token via `.envrc`, subagents default to the route model, convention-12 profile warning. `docs/multi-model-support.md` + README section.
 
+**Superseded (2026-07-14):** `claude-via` + routes template removed. Routing moved to the standalone [claude-model-router](https://github.com/wiklob/claude-model-router) (npm `@wiklob/claude-model-router`) — a loopback daemon routing every request by model id, making model choice per-conversation from any launcher (`/model <id>`), agents view included. Docs + install step 7 rewritten around it.
+
 **D — (Deferred, post-build, separate decision.)** Migrate the live `~/.claude` to install-from-this-repo; shrink `wiklob/v` to state-only or archive it.
 
 ## Prerequisites (v1, documented not abstracted)

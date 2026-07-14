@@ -39,6 +39,8 @@ Both paths run the **same one engine** into the **same one sink**. There is no s
 
 One ticket spans N sessions across ≥2 project dirs, none named for the ticket — and raw `*.jsonl` reads are correctly blocked by the secret guard (transcripts hold cleartext secrets). Both problems are solved by the **V-26 resolver**; never hand-roll the old `grep -rl "<TICKET>" ~/.claude/projects/*/*.jsonl` method.
 
+The deny is semantic, not tool-specific: Python, Node evaluation mode, shell search, copies, alternate APIs, and subagents are equally forbidden ways to obtain raw transcript data. Stop at the first guard/classifier block; never retry through a different path or request a wildcard exception. Security-sensitive transcript inspection is not delegated. Full policy: `docs/security-review-boundaries.md`.
+
 ```sh
 # list every session touching a ticket, ranked
 node ~/.claude/bin/transcript-resolver.mjs resolve <TICKET> [--json] [--limit N]

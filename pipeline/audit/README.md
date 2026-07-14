@@ -18,7 +18,9 @@ runtime data, churny, redacted-but-not-source); only this README is tracked.
   > would log zero errors. (Docs: <https://code.claude.com/docs/en/hooks> — lifecycle
   > table.) Denials from a PreToolUse-deny / manual reject / deny-rule fire **no**
   > hook, so they are out of capture scope — only auto-mode-classifier denials are
-  > observable.
+  > observable. A blocked call is a terminal security result: do not retry through
+  > another tool or interpreter. Record the successful control and the attempted
+  > access as separate facts; see `docs/security-review-boundaries.md`.
 
 - **Manual mode** (the behavioral backstop, below).
 

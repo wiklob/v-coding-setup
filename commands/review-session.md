@@ -29,7 +29,8 @@ Wraps the session-review **engine** (`bin/session-review.mjs`, two lenses — Le
 4. Report the summary line back in one line. Done — routing happens later in `/harvest-pipeline-bugs`.
 
 ## Hard rules
-- **One engine.** Only ever invoke `~/.claude/bin/session-review.mjs` — no re-implemented analysis, no second detector. It in turn calls only `~/.claude/bin/log-pipeline-error.mjs` (the one logger, the one sink).
+- **Semantic deny inheritance.** Raw `~/.claude/projects/**/*.jsonl` access is forbidden through every tool and indirect path. Never substitute Python, Node evaluation mode, shell search, copies, alternate APIs, or a subagent for a denied read; stop at the first block. See `docs/security-review-boundaries.md`.
+- **One engine.** Only ever invoke `~/.claude/bin/session-review.mjs` — no re-implemented discovery or analysis, no second detector. It in turn calls only `~/.claude/bin/log-pipeline-error.mjs` (the one logger, the one sink).
 - **Absolute `~/.claude` path**, never a worktree-relative `bin/…`: the log path follows the script's location, so a worktree copy writes the wrong (gitignored, harvester-invisible) log.
 - **Never pass `--tool`** to the underlying logger path — the default `"manual"` is what the harvester keys on to route the entry as a `review` finding.
 - **Never triage here** — like `/report-bug`, emitting is commitment-free; the read-side (`/harvest-pipeline-bugs`) clusters and files tickets.

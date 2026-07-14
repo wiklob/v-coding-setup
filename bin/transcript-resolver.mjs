@@ -364,6 +364,17 @@ async function eachMessageText(file, fn) {
 
 async function summarize(file) {
   const s = { messages: 0, user: 0, assistant: 0, tool_calls: {}, first_ts: null, last_ts: null };
+  // V-379 examine-only audit: aggregate model + usage/cache field-presence. Counts and
+  // model-id strings only — never message content; model ids / token counts are not secrets.
+  const audit = {
+    models: {}, // observed model id -> assistant-message count
+    assistant_with_model: 0,
+    assistant_missing_model: 0,
+    assistant_with_usage: 0,
+    assistant_missing_usage: 0,
+    usage_fields: {}, // usage sub-field -> count of assistant messages carrying it
+    schema_versions: {}, // obj.version marker -> line count
+  };
   const rl = createInterface({ input: createReadStream(file), crlfDelay: Infinity });
   for await (const line of rl) {
     if (!line) continue;
@@ -377,10 +388,28 @@ async function summarize(file) {
       s.messages++;
       s[obj.type]++;
     }
+    if (obj.version) audit.schema_versions[obj.version] = (audit.schema_versions[obj.version] ?? 0) + 1;
     if (obj.type === "assistant") {
       if (obj.timestamp) {
         s.first_ts ??= obj.timestamp;
         s.last_ts = obj.timestamp;
+      }
+      // V-379: model + usage field presence (aggregate only).
+      const model = obj.message?.model;
+      if (typeof model === "string" && model) {
+        audit.models[model] = (audit.models[model] ?? 0) + 1;
+        audit.assistant_with_model++;
+      } else {
+        audit.assistant_missing_model++;
+      }
+      const usage = obj.message?.usage;
+      if (usage && typeof usage === "object") {
+        audit.assistant_with_usage++;
+        for (const k of Object.keys(usage)) {
+          audit.usage_fields[k] = (audit.usage_fields[k] ?? 0) + 1;
+        }
+      } else {
+        audit.assistant_missing_usage++;
       }
       const content = obj.message?.content;
       if (Array.isArray(content)) {
@@ -392,6 +421,7 @@ async function summarize(file) {
       }
     }
   }
+  s.audit = audit;
   return s;
 }
 

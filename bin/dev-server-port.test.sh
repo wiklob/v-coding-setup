@@ -41,11 +41,23 @@ start_server() {
   (cd "$cwd" && exec python3 -m http.server "$port" --bind 127.0.0.1 >"$BOX/server-$port.log" 2>&1) &
   local pid=$!
   PIDS+=("$pid")
-  local i
-  for i in $(seq 1 200); do
-    lsof -nP -a -p "$pid" -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1 && return 0
-    sleep 0.05
-  done
+  if python3 - "$port" <<'PY'
+import socket
+import sys
+import time
+
+port = int(sys.argv[1])
+for _ in range(200):
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.1):
+            raise SystemExit(0)
+    except OSError:
+        time.sleep(0.05)
+raise SystemExit(1)
+PY
+  then
+    return 0
+  fi
   printf 'fixture failed to listen on %s; server log:\n' "$port" >&2
   while IFS= read -r line; do printf '  %s\n' "$line" >&2; done < "$BOX/server-$port.log"
   return 1

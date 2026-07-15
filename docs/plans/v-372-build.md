@@ -1,7 +1,7 @@
 # Build plan: V-372 — EnterWorktree safety-gate worktree migration
 Status: ready
 Created: 2026-07-15 by /scope
-Ticket: https://linear.app/wiklob/issue/V-372/enterworktree-21206-safety-gate-makes-every-sibling-worktree-go-run
+Ticket: V-372 (Linear; private workspace)
 Parent plan: none — standalone
 
 ## Goal

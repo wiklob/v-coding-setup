@@ -11,6 +11,7 @@ import {
   legacyBindingPath,
   migrateBinding,
   moveLegacyWorktree,
+  prepareWorktreeParent,
   readBinding,
   resolveLayout,
   worktreeName,
@@ -76,6 +77,10 @@ try {
   git("-C", repo, "add", "seed.txt");
   git("-C", repo, "commit", "-qm", "seed");
   git("-C", repo, "worktree", "add", "-q", "-b", "ticket-v-1", legacy, "main");
+
+  const createTarget = join(repo, ".claude", "worktrees", "new-ticket");
+  const prepared = prepareWorktreeParent(createTarget);
+  check("managed create parent is prepared explicitly", existsSync(prepared) && prepared === join(repo, ".claude", "worktrees"));
 
   const payload = { mode: "standalone", linearIssue: "V-1" };
   const legacyMarker = legacyBindingPath(legacy);

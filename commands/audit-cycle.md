@@ -10,7 +10,7 @@ Sequence `/sweep` → `/triage-findings` → `/spawn-tickets` (per ready plan) i
 
 ## Start check (soft)
 - `root="$(git rev-parse --show-toplevel)"`. Target = `$ARGUMENTS` if given, else `$root`. Resolve absolute.
-- If cwd has `.claude/active-project.json` (you're inside a project worktree): warn — auditing usually runs from the main worktree on `<baseBranch>`. Ask whether to proceed here or `cd` to main first. Don't hard-block.
+- Detect a bound linked worktree through the helper, not a checkout marker: compare `$root`'s absolute `--git-dir` and `--git-common-dir`; when linked, run `node ~/.claude/bin/ticket-worktree.mjs migrate-binding --worktree "$root"` before `node ~/.claude/bin/ticket-worktree.mjs binding-status --worktree "$root"`. Conflict/malformed state hard-STOPs; `private` means this is a bound project worktree → warn that auditing usually runs from the main checkout on `<baseBranch>` and ask whether to proceed here or use main first. `none` means no binding warning. Never access the legacy checkout marker directly.
 - Read `<root>/.claude/ticket-flow.json`; missing → `/ticket-flow-init`, STOP.
 
 ## Resumability detect (idempotent re-entry)

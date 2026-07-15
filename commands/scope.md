@@ -44,7 +44,7 @@ Multiple flags compose. Default (no flags) = run all phases.
 
 ## 1. Load context
 
-- Read `$WT_ABS/.claude/active-project.json` — mode + ticket ID (standalone: `binding.linearIssue`; feature: derive from current branch via one `list_issues project: <bound> state: "In Progress" assignee: "me" limit: 3`).
+- Run `node ~/.claude/bin/ticket-worktree.mjs migrate-binding --worktree "$WT_ABS"` before normal binding read; malformed/conflicting legacy state hard-STOPs. Then read with `node ~/.claude/bin/ticket-worktree.mjs read-binding --worktree "$WT_ABS"` — mode + ticket ID (standalone: `binding.linearIssue`; feature: derive from current branch via one `list_issues project: <bound> state: "In Progress" assignee: "me" limit: 3`). Never access the legacy checkout marker directly.
 - `mcp__linear get_issue` on the active ticket. Capture: title, description (Goal + Acceptance + any ## Fix code blocks), `gitBranchName`, parent project.
 - Read parent project plan at `$root/docs/plans/<planSlug>.md` if feature mode and `planSlug` set. Locate the ticket's Manifest part + Stack Decision.
 - Read repo root `CLAUDE.md`.

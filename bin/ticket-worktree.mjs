@@ -218,6 +218,12 @@ export function migrateBinding(worktree) {
   return { status: "migrated", path: privatePath };
 }
 
+export function prepareWorktreeParent(worktreePath) {
+  const parent = dirname(resolve(worktreePath));
+  mkdirSync(parent, { recursive: true });
+  return parent;
+}
+
 export function listWorktreePaths(sourceRoot) {
   const output = git(["-C", resolve(sourceRoot), "worktree", "list", "--porcelain", "-z"]);
   return output.split("\0").filter((entry) => entry.startsWith("worktree ")).map((entry) => canonicalPath(entry.slice("worktree ".length)));
@@ -271,6 +277,8 @@ function main() {
       issue: flags.issue,
       milestone: flags.milestone,
     });
+  } else if (command === "prepare-parent") {
+    result = { status: "ready", path: prepareWorktreeParent(required(flags, "path")) };
   } else if (command === "binding-path") {
     process.stdout.write(`${bindingPath(required(flags, "worktree"))}\n`);
     return;
@@ -291,7 +299,7 @@ function main() {
       managedPath: required(flags, "managed"),
     });
   } else {
-    throw new Error("usage: ticket-worktree.mjs <resolve|binding-path|binding-status|read-binding|write-binding|migrate-binding|move-legacy> [flags]");
+    throw new Error("usage: ticket-worktree.mjs <resolve|prepare-parent|binding-path|binding-status|read-binding|write-binding|migrate-binding|move-legacy> [flags]");
   }
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }

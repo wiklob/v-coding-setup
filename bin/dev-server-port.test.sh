@@ -42,10 +42,12 @@ start_server() {
   local pid=$!
   PIDS+=("$pid")
   local i
-  for i in $(seq 1 50); do
+  for i in $(seq 1 200); do
     lsof -nP -a -p "$pid" -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1 && return 0
     sleep 0.05
   done
+  printf 'fixture failed to listen on %s; server log:\n' "$port" >&2
+  while IFS= read -r line; do printf '  %s\n' "$line" >&2; done < "$BOX/server-$port.log"
   return 1
 }
 

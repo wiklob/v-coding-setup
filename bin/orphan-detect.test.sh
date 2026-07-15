@@ -15,12 +15,15 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
 DETECT="$HERE/orphan-detect.sh"
+HELPER="$HERE/ticket-worktree.mjs"
 pass=0; fail=0
 ok()  { printf 'ok   — %s\n' "$1"; pass=$((pass+1)); }
 bad() { printf 'FAIL — %s (got: %s)\n' "$1" "$2"; fail=$((fail+1)); }
 
-box="$(mktemp -d)"; trap 'rm -rf "$box"' EXIT
+mkdir -p "$ROOT/tmp"
+box="$(mktemp -d "$ROOT/tmp/orphan-detect.XXXXXX")"; trap 'rm -rf "$box"' EXIT
 
 # --- main repo with one commit on `main` ---
 REPO="$box/repo"
@@ -36,7 +39,7 @@ TICKET_BRANCH="flingelms30/v-99-some-ticket"
 # --- fixture A: orphan — worktree on a ticket branch, no binding, clean ---
 WT_ORPHAN="$box/wt-orphan"
 git -C "$REPO" worktree add -q -b "$TICKET_BRANCH" "$WT_ORPHAN" main
-# (no .claude/active-project.json written — this is the crashed-mid-setup state)
+# No Git-private binding was written — this is the crashed-mid-setup state.
 
 # --- fixture B: detached worktree on base, no binding, clean ---
 WT_DETACHED="$box/wt-detached"
@@ -48,12 +51,11 @@ v() { "$DETECT" "$@" 2>/dev/null; }
 out="$(v "$WT_ORPHAN" main)"
 [ "$out" = "orphan-recoverable" ] && ok "binding-less + clean + ticket branch → orphan-recoverable" || bad "orphan not recognized" "$out"
 
-# 2. has-binding — once the binding exists, it's no longer an orphan.
-mkdir -p "$WT_ORPHAN/.claude"
-printf '{ "linearProject": "x" }\n' > "$WT_ORPHAN/.claude/active-project.json"
+# 2. has-binding — once the private binding exists, it's no longer an orphan.
+node "$HELPER" write-binding --worktree "$WT_ORPHAN" --json '{"linearProject":"x"}' >/dev/null
 out="$(v "$WT_ORPHAN" main)"
-[ "$out" = "has-binding" ] && ok "binding present → has-binding" || bad "binding present misclassified" "$out"
-rm -rf "$WT_ORPHAN/.claude"
+[ "$out" = "has-binding" ] && ok "private binding present → has-binding" || bad "private binding misclassified" "$out"
+rm -f "$(node "$HELPER" binding-path --worktree "$WT_ORPHAN")"
 
 # 3. dirty-stop — possible real work, STOP preserved.
 printf 'wip\n' > "$WT_ORPHAN/uncommitted.txt"

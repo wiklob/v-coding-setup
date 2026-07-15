@@ -152,7 +152,7 @@ export function activeCommandFromTranscript(transcriptPath) {
 //   - `.git` is a DIR (normal checkout) → basename of that dir.
 //   - `.git` is a FILE (git worktree) → it reads `gitdir: <main>/.git/worktrees/<name>`,
 //     so resolve back to the MAIN repo root (`<main>`) and return its basename — NOT
-//     the worktree dir's slug (`-claude-wt-v-88`). Pipeline commands run inside
+//     the managed worktree dir's slug (`repo-wt-v-88`). Pipeline commands run inside
 //     per-ticket worktrees, so without this every entry's origin would be a worktree
 //     slug instead of the repo it belongs to.
 // Falls back to the cwd's own basename when no `.git` is found. Never throws and

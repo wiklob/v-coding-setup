@@ -10,5 +10,9 @@
 node_modules/
 dist/
 
+# Claude Code local worktree/config state
+.claude/worktrees/
+.claude/ticket-flow.json
+
 # macOS
 .DS_Store

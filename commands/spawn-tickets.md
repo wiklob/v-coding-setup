@@ -109,4 +109,4 @@ Let the user edit titles, scope, splits, fold-targets, milestone groupings / pha
 
 ## 4. End — name the next step
 - State the project name, the **execution mode** set (`parallel` / `milestone-parallel` / single-thread, read back per §3), the Initiative it attached to (or that it's unattached + why), the milestones created (name + phase), and the first ready (unblocked) ticket.
-- Print exactly: `/next-ticket` *(run it to start the project — it will create the project-bound worktree `../<repo>-wt-<project-slug>` on first use)*. Note that all subsequent `/next-ticket` in that worktree stay inside this project.
+- Print exactly: `/next-ticket` *(run it to start the project — for an ordinary repo it will create the project-bound worktree at `<repo>/.claude/worktrees/<repo>-wt-<project-slug>` on first use)*. Note that all subsequent `/next-ticket` in that worktree stay inside this project. The exact `~/.claude` legacy source checkout remains the temporary sibling-layout exception until V-376.

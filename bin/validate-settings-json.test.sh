@@ -16,12 +16,14 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
 GUARD="$HERE/validate-settings-json.mjs"
 pass=0; fail=0
 ok()  { printf 'ok   — %s\n' "$1"; pass=$((pass+1)); }
 bad() { printf 'FAIL — %s (got exit: %s)\n' "$1" "$2"; fail=$((fail+1)); }
 
-box="$(mktemp -d)"; trap 'rm -rf "$box"' EXIT
+mkdir -p "$ROOT/tmp"
+box="$(mktemp -d "$ROOT/tmp/validate-settings.XXXXXX")"; trap 'rm -rf "$box"' EXIT
 
 # Run the guard against a target file; echo only its exit code.
 rc_of() { node "$GUARD" "$1" </dev/null >/dev/null 2>&1; echo $?; }
@@ -38,9 +40,9 @@ cat > "$CONFLICT" <<'EOF'
 {
   "permissions": {
 <<<<<<< Updated upstream
-    "allow": ["Write(/Users/testuser/*-claude-wt-*/.claude/active-project.json)"]
+    "allow": ["Bash(git *)"]
 =======
-    "allow": ["Write(/Users/testuser/-claude-wt-*/.claude/active-project.json)"]
+    "allow": ["Bash(gh *)"]
 >>>>>>> Stashed changes
   }
 }
@@ -58,9 +60,16 @@ rc=$(rc_of "$BROKEN")
 rc=$(rc_of "$box/does-not-exist.json")
 [ "$rc" -eq 0 ] && ok "missing target → exit 0 (absence is not corruption)" || bad "missing file blocked" "$rc"
 
-# --- the live committed settings.json must itself be valid (regression guard) ---
-rc=$(rc_of "$HERE/../settings.json")
+# --- the live committed settings files must themselves be valid ---
+rc=$(rc_of "$ROOT/settings.json")
 [ "$rc" -eq 0 ] && ok "repo settings.json is valid JSON" || bad "repo settings.json invalid" "$rc"
+rc=$(rc_of "$ROOT/settings.example.json")
+[ "$rc" -eq 0 ] && ok "settings.example.json is valid JSON" || bad "settings.example.json invalid" "$rc"
+if grep -q 'active-project\.json' "$ROOT/settings.example.json"; then
+  bad "settings.example.json retains obsolete binding-marker permission" "present"
+else
+  ok "settings.example.json omits obsolete binding-marker permission"
+fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

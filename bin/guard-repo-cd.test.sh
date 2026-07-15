@@ -18,8 +18,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+mkdir -p "$ROOT/tmp"
 
-TMP="$(mktemp -d)"
+TMP="$(mktemp -d "$ROOT/tmp/guard-repo-cd.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 
 # Sandbox: a fake HOME and a fake checkout whose basename differs from the repo
@@ -82,7 +84,7 @@ expect_rewrite "MAIN_WT=x; cd $FAKE_HOME/myrepo && gh pr view 197" \
 
 # --- 2. Commands the hook must NOT touch. ---
 expect_noop "cd $FAKE_ROOT && gh pr view 1"                    # the real checkout
-expect_noop "cd $FAKE_HOME/-claude-wt-v-337 && git status"     # a worktree
+expect_noop "cd $FAKE_ROOT/.claude/worktrees/checkout-wt-v-337 && git status"  # managed worktree
 expect_noop "cd $FAKE_HOME/myrepos && ls"                      # longer sibling (bad path is a prefix)
 expect_noop 'gh pr view 246 --repo alice/myrepo'               # no cd at all
 expect_noop "echo cd $FAKE_HOME/myrepo"                        # cd is an argument

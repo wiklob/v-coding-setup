@@ -28,8 +28,8 @@
 #   migration-lint. No supabase/migrations dir / no .sql files → skipped clean.
 #
 # Concurrency lock (--apply only):
-#   Parallel ticket worktrees ($HOME/-claude-wt-*) all deploy --linked to
-#   ONE shared prod DB. To stop two concurrent applies racing on schema_migrations,
+#   Parallel managed ticket worktrees (<repo>/.claude/worktrees/<repo>-wt-*) all
+#   deploy --linked to ONE shared prod DB. To stop two concurrent applies racing on schema_migrations,
 #   --apply takes a host-global mutex BEFORE the real push and releases it on exit
 #   (incl. failure/interrupt, via trap — no stale lock left behind).
 #     Lock dir : $HOME/.claude/run/sb-push-<SUPABASE_PROJECT_ID>.lock  (mkdir-atomic,

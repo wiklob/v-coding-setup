@@ -6,10 +6,10 @@ Quick reference for the core workflow commands. The 38 command files in `~/.clau
 
 | Command | Phase | Role |
 |---|---|---|
-| `/ticket-flow-init` | Setup (once per repo) | Detect settings, create scope label + bucket, write `ticket-flow.json`, gitignore binding. Idempotent. |
+| `/ticket-flow-init` | Setup (once per repo) | Detect settings, create scope label + bucket, write `ticket-flow.json`, gitignore managed worktree contents. Idempotent. |
 | `/plan <idea>` | Create work | Frame → Stack Decision checkpoint → small vertical-slice manifest |
 | `/spawn-tickets [plan]` | Create work | Plan → Linear project + tickets; commits + pushes plan to `<baseBranch>` atomically |
-| `/next-ticket [PROJECT \| ISSUE-ID]` | Start work | Establish/use worktree (feature or standalone mode), pick + In Progress |
+| `/next-ticket [PROJECT \| ISSUE-ID]` | Start work | Establish/use worktree (feature, standalone, or milestone mode), pick + In Progress |
 | `/resume-ticket [ISSUE-ID]` | Resume | Pick up an In Progress ticket; no Linear state change |
 | `/scope [--flags]` | Plan execution | Validate active ticket vs current code — per-Acceptance-item validation, compile-check any ticket-provided snippets (catches bundle-poisoning that tsc misses), write `docs/plans/<id>-build.md`. Full autonomy; surfaces `needs input:` on snippet compile-failure or unimplementable Acceptance items. |
 | `/build [--flags]` | Execute work | Implement active ticket — follow per-ticket plan (`docs/plans/<id>-build.md`) if present, else require trivial. Code per Acceptance → `/verify-tests` → commit → push. Full autonomy; flags introduce checkpoints. Stops at preflight if non-trivial without a scope plan (override with `--force`). |
@@ -134,20 +134,24 @@ Opt-in per repo via the `docs` block in `.claude/ticket-flow.json` — repos wit
                           /resume-ticket            (mid-build re-entry)
 ```
 
-## Two modes coexist per repo (convention 5)
+## Three worktree modes coexist per repo (convention 5)
 
-- **Feature mode** (target = a non-bucket, non-parallel-labeled Linear project): one worktree per project, sequential tickets, In Progress check blocks parallel within the project. Worktree path = `../<repo>-wt-<project-slug>`.
-- **Standalone mode** (target = `standaloneProject` from `ticket-flow.json` OR any Linear project carrying the `parallel` project label): one worktree per ticket, parallel allowed, Linear project NOT auto-completed by `/land-ticket` (user closes manually when done; the bucket is perpetual, parallel-labeled features are closed by hand). Worktree path = `../<repo>-wt-<issue-key>`.
+Every resolver starts from the exact command-launch checkout: `sourceRoot = git rev-parse --show-toplevel`. Ordinary paths are `<sourceRoot>/.claude/worktrees/<unchanged deterministic basename>`; only an exact installed `~/.claude` source uses the legacy sibling fallback until V-376.
 
-`/next-ticket` auto-detects mode from the target (one `get_project` to inspect labels when the target isn't the bucket). `/land-ticket` reads the worktree's binding `mode` field to do the right cleanup.
+- **Feature mode** (target = a non-bucket project without `parallel`/`milestone-parallel`): one worktree per project, sequential tickets, project-wide In Progress guard. Basename `<repo>-wt-<project-slug>`. `/land-ticket` detaches and reuses it between tickets; the project's last ticket triggers worktree removal and project completion.
+- **Standalone mode** (target = `standaloneProject` or a project carrying `parallel`): one worktree per ticket, parallel allowed, per-ticket guard. Basename `<repo>-wt-<issue-key>`. `/land-ticket` removes it immediately after that ticket merges; it never auto-completes the bucket/project.
+- **Milestone mode** (project carries `milestone-parallel`, which wins over `parallel`): one worktree per milestone, parallel across milestones and sequential within each milestone. Basename `<repo>-wt-<project-slug>-<milestone-slug>`, with the project and milestone segments capped independently. `/land-ticket` reuses it until that milestone's last ticket, removes it then, and completes the project only after all project tickets are done.
+
+`/next-ticket` auto-detects mode from config/project labels. Existing legacy siblings migrate outside-in only when Git registration and filesystem vacancy agree; a session already inside one defers migration, and conflicts stop. `/land-ticket` reads the helper-managed private binding to select lifecycle behavior, exits the worktree before removal, and never force-removes a dirty worktree.
 
 ## Where state lives
 
 - **`~/.claude/commands/*.md`** — the 38 skill definitions (global).
 - **`~/.claude/workflow-conventions.md`** — the 12 conventions every skill reads first.
 - **`~/.claude/plans/*.md`** — plan artifacts for cross-project tooling work (no Linear, no repo). E.g. `docs-automation.md`.
-- **`<repo>/.claude/ticket-flow.json`** — per-repo config (linearTeam, scopeLabel, baseBranch, requiredCheck, optional standaloneProject, **optional `docs` block** for convention 6). Committed.
-- **`<worktree>/.claude/active-project.json`** — per-worktree binding (feature: `{ linearProject, planSlug }`; standalone: `{ mode: "standalone", linearIssue }`). Gitignored.
+- **`<sourceRoot>/.claude/ticket-flow.json`** — per-launch-checkout config (linearTeam, scopeLabel, baseBranch, requiredCheck, optional standaloneProject, **optional `docs` block** for convention 6). Committed.
+- **`<sourceRoot>/.claude/worktrees/<basename>`** — ordinary ticket-flow linked worktree location. The basename is helper-owned and deterministic; nested contents are gitignored by the source checkout. Exact installed `~/.claude` source: sibling fallback only until V-376.
+- **Linked-worktree private Git metadata `claude-ticket-flow.json`** — per-worktree binding resolved by `ticket-worktree.mjs` through `git -C <worktree> rev-parse --path-format=absolute --git-path claude-ticket-flow.json`; never `<worktree>/.claude/active-project.json`. Feature payload `{ linearProject, planSlug }`; standalone `{ mode: "standalone", linearIssue }`; milestone `{ mode: "milestone", linearProject, linearMilestone }`.
 - **Linear** — single source of truth for ticket state. PR-merge does NOT change ticket state; `/land-ticket` §8 closes the ticket explicitly after acceptance. PR bodies carry no closing keyword (guarded by `pr-close-guard`) so a sibling reference can't cross-fire (V-14). **Marking a duplicate:** set `save_issue` `duplicateOf: <id>` — that call *creates* the duplicate relation and Linear then moves the issue to the Duplicate state. Never pass `state: "Duplicate"` (with or without `duplicateOf`) expecting the one call to create the relation: Linear rejects it with *"Missing duplicate relation — issues can only be moved to a duplicate state when a duplicate issue relation exists"* (V-95). The pipeline's normal way to collapse redundant work is `Canceled` (`align` kill) or dedupe-drop (`/harvest-pipeline-bugs` §4c never refiles), so a deliberate Linear Duplicate move is the rare exception — when you do it, establish the relation via `duplicateOf` first/instead.
 - **`<repo>/docs/plans/`** — plan artifacts (convention 1), sweep plans + findings docs. Committed.
 - **`<repo>/docs/{changelog,roadmap,postponed}.md`** — State docs (convention 6). `changelog` auto-appended by `/land-ticket` §6.5; others edited manually or via prompts.

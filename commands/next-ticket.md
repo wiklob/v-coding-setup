@@ -74,7 +74,7 @@ Classify **both returned paths** against `git -C "$sourceRoot" worktree list --p
   Parse/validation/conflict failures hard-STOP. Never read or write the legacy checkout marker directly.
 - **Symlink `.envrc` from the source checkout** via `bash ~/.claude/bin/ensure-envrc.sh "$WT_ABS"`. Idempotent — silent no-op if `$WT_ABS/.envrc` already exists, if `$sourceRoot/.envrc` doesn't exist, or outside a git tree. The SessionStart hook covers sessions opened directly in an existing worktree; this explicit call covers creation mid-session.
 - **Bootstrap deps** in `$WT_ABS` (`npm ci` if `package-lock.json`, else `npm install`, or the repo's documented equivalent). Without this a bare `npx <tool>` may install an unrelated package and false-green the required check.
-- **Scoped per-worktree edit permissions are bootstrapped automatically** by the `SessionStart` hook in `~/.claude/settings.json` (script: `~/.claude/bin/bootstrap-worktree-perms.sh`). Do not write `<wt>/.claude/settings.local.json` from this skill — the hook is the only writer.
+- **Scoped per-worktree edit permissions are bootstrapped automatically** by the `SessionStart` hook in `<home>/.claude/settings.json` (script: `~/.claude/bin/bootstrap-worktree-perms.sh`). Do not write `<wt>/.claude/settings.local.json` from this skill — the hook is the only writer.
 
 **Worktree exists — branch by mode.** First switch the session into `WT_ABS`: `EnterWorktree(path: "$WT_ABS")` (if already there, `ExitWorktree(action: "keep")` then re-enter). Then migrate/read binding state only through the helper:
 - Run `node ~/.claude/bin/ticket-worktree.mjs migrate-binding --worktree "$WT_ABS"` before normal presence/read. This safely imports an old checkout marker; malformed/conflicting state hard-STOPs.

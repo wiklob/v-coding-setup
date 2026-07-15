@@ -148,7 +148,7 @@ Every resolver starts from the exact command-launch checkout: `sourceRoot = git 
 
 - **`~/.claude/commands/*.md`** — the 38 skill definitions (global).
 - **`~/.claude/workflow-conventions.md`** — the 13 conventions every skill reads first.
-- **`~/.claude/plans/*.md`** — plan artifacts for cross-project tooling work (no Linear, no repo). E.g. `docs-automation.md`.
+- **`<home>/.claude/plans/*.md`** — plan artifacts for cross-project tooling work (no Linear, no repo). E.g. `docs-automation.md`.
 - **`<sourceRoot>/.claude/ticket-flow.json`** — per-launch-checkout config (linearTeam, scopeLabel, baseBranch, requiredCheck, optional standaloneProject, **optional `docs` block** for convention 6). Committed.
 - **`<sourceRoot>/.claude/worktrees/<basename>`** — ordinary ticket-flow linked worktree location. The basename is helper-owned and deterministic; nested contents are gitignored by the source checkout. Exact installed `~/.claude` source: sibling fallback only until V-376.
 - **Linked-worktree private Git metadata `claude-ticket-flow.json`** — per-worktree binding resolved by `ticket-worktree.mjs` through `git -C <worktree> rev-parse --path-format=absolute --git-path claude-ticket-flow.json`; never `<worktree>/.claude/active-project.json`. Feature payload `{ linearProject, planSlug }`; standalone `{ mode: "standalone", linearIssue }`; milestone `{ mode: "milestone", linearProject, linearMilestone }`.

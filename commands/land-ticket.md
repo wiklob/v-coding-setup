@@ -470,7 +470,7 @@ node ~/.claude/bin/usage-stats.mjs --ticket <TICKET-ID> --pr <PR#>
 ```
 
 The helper:
-- Binds the **primary** session (whose totals are the headline) by IDENTITY, most-authoritative first: (1) explicit `--session <id>`; (2) the `SessionStart` capture-hook sidecar (`$CLAUDE_JOB_DIR/transcript.json` / `~/.claude/run/transcripts/<encoded-cwd>.json`) — harness-authoritative `transcript_path`, rewritten on every resume/compact; (3) id hints — `CLAUDE_CODE_SESSION_ID`, `state.resumeSessionId`, `state.sessionId`; (4) the resolver's **top content-matched** session. Never newest-`.jsonl`-in-dir, never a self-emitted marker.
+- Binds the **primary** session (whose totals are the headline) by IDENTITY, most-authoritative first: (1) explicit `--session <id>`; (2) the `SessionStart` capture-hook sidecar (`$CLAUDE_JOB_DIR/transcript.json` / `<home>/.claude/run/transcripts/<encoded-cwd>.json`) — harness-authoritative `transcript_path`, rewritten on every resume/compact; (3) id hints — `CLAUDE_CODE_SESSION_ID`, `state.resumeSessionId`, `state.sessionId`; (4) the resolver's **top content-matched** session. Never newest-`.jsonl`-in-dir, never a self-emitted marker.
 - Has **no freshness/staleness gate** — content-match makes recency irrelevant.
 - **Links every other session that mentions the ticket** (via the resolver, content-match) under `related_sessions` — id, dir, mentions, ts — but does **not** sum them into the headline. Content-match over-includes incidental mentions (a single ticket can match dozens of sessions, not the handful that are real), so summing would over-count cost; the file declares `"scope": "primary-session"` and links siblings for audit.
 - Sums token totals + counts tool calls for the primary in one streaming pass, plus per-session monitoring: `compound_bash` (Bash calls stapling steps with ` && `) and `failed_calls` (`tool_result` items flagged `is_error`).
@@ -479,7 +479,7 @@ The helper:
 
 Exit codes: `0` written (proceed to §9); `1` primary unresolvable / git / fs failure — **FAILS LOUD** (STOP and surface inline — do NOT continue to §9 silently); `3` bad args.
 
-If discovery aborts (backfilling later, or no sidecar/hint), inspect with `--dry-run` (prints the payload, writes nothing) and recover with `--session <id>` (pins a specific transcript as primary). Find the right id by content: `grep -l "<TICKET>" ~/.claude/projects/*/*.jsonl` — though `--ticket <ID>` alone usually content-matches the primary.
+If discovery aborts (backfilling later, or no sidecar/hint), inspect with `--dry-run` (prints the payload, writes nothing) and recover with `--session <id>` (pins a specific transcript as primary). Find the right id by content: `grep -l "<TICKET>" <home>/.claude/projects/*/*.jsonl` — though `--ticket <ID>` alone usually content-matches the primary.
 
 Output JSON shape (so callers know what to expect):
 
@@ -512,7 +512,7 @@ Output JSON shape (so callers know what to expect):
 }
 ```
 
-The full session transcript stays at `~/.claude/projects/<encoded-cwd>/<session_id>.jsonl` for audit — `session_id` (primary) and each `related_sessions[].session_id` are the cross-references. **For retrieval + analysis recipes (per-ticket overview, cost ranking, tool-frequency rollups, transcript cross-reference, manual recovery if §8.5 ever fails) see `~/.claude/usage-stats.md`.**
+The full session transcript stays at `<home>/.claude/projects/<encoded-cwd>/<session_id>.jsonl` for audit — `session_id` (primary) and each `related_sessions[].session_id` are the cross-references. **For retrieval + analysis recipes (per-ticket overview, cost ranking, tool-frequency rollups, transcript cross-reference, manual recovery if §8.5 ever fails) see `~/.claude/usage-stats.md`.**
 
 ## 8.6 Review the session into the measurement sinks (symmetric with §8.5)
 

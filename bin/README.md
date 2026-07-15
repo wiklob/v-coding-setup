@@ -23,6 +23,7 @@ Current files:
 - `transcript-resolver.mjs` — ticket → all sessions, secret-redacted reader (V-26). The shared discovery+read primitive for post-session review (V-5) and §8.5 stats (V-1/V-20/V-21). Name is specific; no prefix. See "transcript-resolver contract" below.
 - `session-review.mjs` — the V-5 post-session review ENGINE. Streams a resolved transcript once and emits a two-lens report: Lens A (repetitive-call mining → Script/Allow/Deny-or-Ask buckets, feeds V-4/V-23) and Lens B (correctness-flag *candidates* — failed-then-claimed, error-swallow, doc-asserts-state; never verdicts, per the V-25 "don't over-automate" caveat). Reuses `discoverPrimary` (usage-stats.mjs) for resolution and `redact` (transcript-resolver.mjs) for safety — every emitted byte is redacted, tool-result bodies never printed. The *written* SOP is `pipeline/review-standard.md` (V-25). Auto-allowlisted by `Bash(node ~/.claude/bin/*.mjs)`.
 - `ensure-envrc.sh` — shared (SessionStart hook + /next-ticket). No prefix because no owner.
+- `dev-server-port.sh` — `/land-ticket` §4.9 worktree-aware port selection + listener-cwd verification; prevents a visual-verification handoff from silently serving another worktree.
 - `bootstrap-worktree-perms.sh` — SessionStart hook (pre-existing).
 - `sb-mgmt` — Supabase Management API verb (bare verb; writes ask-gated). See "Bare-verb helpers" below.
 - `pr-health` — PR status rollup (bare verb; pure read). Wired into /land-ticket §2 + /bulk-fix.

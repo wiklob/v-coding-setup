@@ -83,9 +83,8 @@
       "mcp__linear__create_attachment_from_upload",
       "mcp__linear__prepare_attachment_upload",
       "mcp__linear__linear_graphql",
-      "Write(~/*-claude-wt-*/.claude/active-project.json)",
-      "Edit(~/.claude/pipeline/audit/**)",
-      "Write(~/.claude/pipeline/audit/**)"
+      "Edit(~/*-claude-wt-*/.claude/active-project.json)",
+      "Edit(~/.claude/pipeline/audit/**)"
     ],
     "deny": [
       "Read(.envrc)",
@@ -139,9 +138,7 @@
       "Bash(git clean -f*)",
       "Bash(direnv exec*)",
       "Edit(**/.envrc)",
-      "Write(**/.envrc)",
-      "Edit(**/.env)",
-      "Write(**/.env)"
+      "Edit(**/.env)"
     ],
     "ask": [
       "Bash(supabase db push*)",

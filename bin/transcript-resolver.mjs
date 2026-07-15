@@ -364,6 +364,28 @@ async function eachMessageText(file, fn) {
 
 async function summarize(file) {
   const s = { messages: 0, user: 0, assistant: 0, tool_calls: {}, first_ts: null, last_ts: null };
+  // V-379 examine-only audit: aggregate model + usage/cache field-presence. Counts and
+  // model-id strings only — never message content; model ids / token counts are not secrets.
+  const audit = {
+    models: {}, // observed model id -> assistant-message count
+    assistant_with_model: 0,
+    assistant_missing_model: 0,
+    assistant_with_usage: 0,
+    assistant_missing_usage: 0,
+    usage_fields: {}, // usage sub-field -> count of assistant messages carrying it
+    // V-389: field presence != value. Sum the numeric token values so we can tell whether
+    // prompt caching is actually happening (cache_read_input_tokens > 0) or the proxy strips
+    // it (fields present but always 0). Sums + a >0 hit count; token counts are not secrets.
+    usage_totals: {
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+    },
+    cache_read_nonzero_msgs: 0, // assistant messages with cache_read_input_tokens > 0
+    cache_creation_nonzero_msgs: 0,
+    schema_versions: {}, // obj.version marker -> line count
+  };
   const rl = createInterface({ input: createReadStream(file), crlfDelay: Infinity });
   for await (const line of rl) {
     if (!line) continue;
@@ -377,10 +399,36 @@ async function summarize(file) {
       s.messages++;
       s[obj.type]++;
     }
+    if (obj.version) audit.schema_versions[obj.version] = (audit.schema_versions[obj.version] ?? 0) + 1;
     if (obj.type === "assistant") {
       if (obj.timestamp) {
         s.first_ts ??= obj.timestamp;
         s.last_ts = obj.timestamp;
+      }
+      // V-379: model + usage field presence (aggregate only).
+      const model = obj.message?.model;
+      if (typeof model === "string" && model) {
+        audit.models[model] = (audit.models[model] ?? 0) + 1;
+        audit.assistant_with_model++;
+      } else {
+        audit.assistant_missing_model++;
+      }
+      const usage = obj.message?.usage;
+      if (usage && typeof usage === "object") {
+        audit.assistant_with_usage++;
+        for (const k of Object.keys(usage)) {
+          audit.usage_fields[k] = (audit.usage_fields[k] ?? 0) + 1;
+        }
+        // V-389: accumulate numeric token values (guarded — some sub-fields are objects).
+        for (const k of Object.keys(audit.usage_totals)) {
+          if (typeof usage[k] === "number") audit.usage_totals[k] += usage[k];
+        }
+        if (typeof usage.cache_read_input_tokens === "number" && usage.cache_read_input_tokens > 0)
+          audit.cache_read_nonzero_msgs++;
+        if (typeof usage.cache_creation_input_tokens === "number" && usage.cache_creation_input_tokens > 0)
+          audit.cache_creation_nonzero_msgs++;
+      } else {
+        audit.assistant_missing_usage++;
       }
       const content = obj.message?.content;
       if (Array.isArray(content)) {
@@ -392,6 +440,7 @@ async function summarize(file) {
       }
     }
   }
+  s.audit = audit;
   return s;
 }
 

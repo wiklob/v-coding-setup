@@ -7,8 +7,8 @@ The pipeline's procedures are model-independent; its **trust posture** is not. E
 At the start of any multi-step pipeline skill (convention 12 makes this part of the read-first substrate):
 
 1. Identify the model family you are running as — you know your own model identity.
-2. Read the matching profile: `fable-5*` → `fable-5.md` · `opus-4-8` / other Opus 4.x → `opus-4-8.md`.
-3. **No match, or unsure → `opus-4-8.md`** (the conservative default: more rails, never fewer).
+2. Read the matching profile: `fable-5*` → `fable-5.md` · `opus-4-8` / other Opus 4.x → `opus-4-8.md` · **any non-Anthropic model reached over the router/proxy (e.g. `gpt-5.6-sol`, `gpt-5.6-terra`, other `gpt-*` / routed ids) → `routed.md`** (tight-context posture: these run below the Opus-1M window the commands assume, and without reliable prompt caching).
+3. **No match, or unsure → `opus-4-8.md`** (the conservative default: more rails, never fewer). The one exception: if you know you are a routed/proxied non-Anthropic model but the exact id is unfamiliar, prefer `routed.md` — the context-overflow failure mode (V-387/V-388) is the dominant risk there, and `opus-4-8.md` would wrongly prescribe fan-out and whole-file reads into a small window.
 
 A subagent uses the profile its dispatching prompt names; if none is named, it applies the same self-identification rule.
 

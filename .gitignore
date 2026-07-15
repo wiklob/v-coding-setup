@@ -12,3 +12,6 @@ dist/
 
 # macOS
 .DS_Store
+
+# Local per-machine ticket-flow binding (Linear UUIDs/identity — never commit)
+.claude/ticket-flow.json

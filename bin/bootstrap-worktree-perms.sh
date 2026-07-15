@@ -4,7 +4,9 @@
 # Runs as a SessionStart hook (configured in ~/.claude/settings.json).
 # If $PWD is inside a Claude-managed worktree, drops a scoped
 # settings.local.json into that worktree's .claude/ directory:
-#   - allows Edit/Write/MultiEdit only under the worktree subtree
+#   - allows edits only under the worktree subtree (Edit(path) rules cover all
+#     file-editing tools — Write/Edit/MultiEdit/NotebookEdit; do NOT add separate
+#     Write()/MultiEdit() rules, the harness ignores them and warns on every launch)
 #   - denies edits of the settings file itself (Claude can't widen its scope)
 # Idempotent — exits silently if the file already exists or cwd is not a worktree.
 
@@ -58,17 +60,11 @@ cat > "$settings_file" <<EOF
   "_worktree_root": "$wt_esc",
   "permissions": {
     "allow": [
-      "Edit($wt_esc/**)",
-      "Write($wt_esc/**)",
-      "MultiEdit($wt_esc/**)"
+      "Edit($wt_esc/**)"
     ],
     "deny": [
       "Edit($wt_esc/.claude/settings.local.json)",
-      "Write($wt_esc/.claude/settings.local.json)",
-      "MultiEdit($wt_esc/.claude/settings.local.json)",
-      "Edit($wt_esc/.claude/settings.json)",
-      "Write($wt_esc/.claude/settings.json)",
-      "MultiEdit($wt_esc/.claude/settings.json)"
+      "Edit($wt_esc/.claude/settings.json)"
     ]
   }
 }

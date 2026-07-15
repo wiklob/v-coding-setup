@@ -373,6 +373,17 @@ async function summarize(file) {
     assistant_with_usage: 0,
     assistant_missing_usage: 0,
     usage_fields: {}, // usage sub-field -> count of assistant messages carrying it
+    // V-389: field presence != value. Sum the numeric token values so we can tell whether
+    // prompt caching is actually happening (cache_read_input_tokens > 0) or the proxy strips
+    // it (fields present but always 0). Sums + a >0 hit count; token counts are not secrets.
+    usage_totals: {
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+    },
+    cache_read_nonzero_msgs: 0, // assistant messages with cache_read_input_tokens > 0
+    cache_creation_nonzero_msgs: 0,
     schema_versions: {}, // obj.version marker -> line count
   };
   const rl = createInterface({ input: createReadStream(file), crlfDelay: Infinity });
@@ -408,6 +419,14 @@ async function summarize(file) {
         for (const k of Object.keys(usage)) {
           audit.usage_fields[k] = (audit.usage_fields[k] ?? 0) + 1;
         }
+        // V-389: accumulate numeric token values (guarded — some sub-fields are objects).
+        for (const k of Object.keys(audit.usage_totals)) {
+          if (typeof usage[k] === "number") audit.usage_totals[k] += usage[k];
+        }
+        if (typeof usage.cache_read_input_tokens === "number" && usage.cache_read_input_tokens > 0)
+          audit.cache_read_nonzero_msgs++;
+        if (typeof usage.cache_creation_input_tokens === "number" && usage.cache_creation_input_tokens > 0)
+          audit.cache_creation_nonzero_msgs++;
       } else {
         audit.assistant_missing_usage++;
       }

@@ -1,6 +1,6 @@
 # Workflow chains — command map
 
-Quick reference for the core workflow commands. The 38 command files in `~/.claude/commands/` include the 18 documented below — the procedural chain (17 commands that chain end-to-end) plus the craft-led `/riff` divergent path; the rest are sub-agent helpers, the review/audit lenses, and the capture/report front-doors, each self-describing in its own file. Each command also prints its own "next step" at the end (convention 4), so memorization isn't required.
+Quick reference for the core workflow commands. The 46 command files in `~/.claude/commands/` include the 18 documented below — the procedural chain (17 commands that chain end-to-end) plus the craft-led `/riff` divergent path; the rest are sub-agent helpers, the review/audit lenses, and the capture/report front-doors, each self-describing in its own file. Each command also prints its own "next step" at the end (convention 4), so memorization isn't required.
 
 ## The 18 core commands
 
@@ -147,7 +147,7 @@ Every resolver starts from the exact command-launch checkout: `sourceRoot = git 
 ## Where state lives
 
 - **`~/.claude/commands/*.md`** — the 38 skill definitions (global).
-- **`~/.claude/workflow-conventions.md`** — the 12 conventions every skill reads first.
+- **`~/.claude/workflow-conventions.md`** — the 13 conventions every skill reads first.
 - **`~/.claude/plans/*.md`** — plan artifacts for cross-project tooling work (no Linear, no repo). E.g. `docs-automation.md`.
 - **`<sourceRoot>/.claude/ticket-flow.json`** — per-launch-checkout config (linearTeam, scopeLabel, baseBranch, requiredCheck, optional standaloneProject, **optional `docs` block** for convention 6). Committed.
 - **`<sourceRoot>/.claude/worktrees/<basename>`** — ordinary ticket-flow linked worktree location. The basename is helper-owned and deterministic; nested contents are gitignored by the source checkout. Exact installed `~/.claude` source: sibling fallback only until V-376.
@@ -159,5 +159,5 @@ Every resolver starts from the exact command-launch checkout: `sourceRoot = git 
 
 ## See also
 
-- `~/.claude/workflow-conventions.md` — the 12 conventions every skill follows (plan artifact · deviation log · acceptance checklist · pipeline continuity · project=feature=one worktree · documentation lifecycle · bash composition · observed-over-asserted state · stay on-ticket · craft register · confirm gates · model profile).
+- `~/.claude/workflow-conventions.md` — the 13 conventions every skill follows (plan artifact · deviation log · acceptance checklist · pipeline continuity · project=feature=one worktree · documentation lifecycle · bash composition · observed-over-asserted state · stay on-ticket · craft register · confirm gates · model profile).
 - Each skill's own description at `~/.claude/commands/<skill>.md` — full operational detail per command.

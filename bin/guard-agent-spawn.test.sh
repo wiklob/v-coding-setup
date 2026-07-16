@@ -71,6 +71,13 @@ SESS2="$TMP/proj/sess-2"; mkdir -p "$SESS2/subagents"; : > "$TMP/proj/sess-2.jso
 out="$(printf '%s' '{"tool_name":"Agent","tool_input":{},"session_id":"sess-2","transcript_path":"'"$TMP/proj/sess-2.jsonl"'"}' | SPAWN_GUARD_SESSION_BUDGET=2 python3 "$GUARD")" ; rc=$?
 [ $rc -eq 0 ] && [ -z "$out" ] && ok "parallel session has its own budget" || bad "sibling session budget (out=$out)"
 
+# 9b. budget 0 = hard freeze, even on a virgin session (no subagents dir yet).
+#     Live-drill regression 2026-07-16: isdir-gating + env floor of 1 silently
+#     turned budget 0 into "60, and only after the first spawn".
+SESS3="$TMP/proj/sess-3"; : > "$TMP/proj/sess-3.jsonl"   # deliberately NO subagents dir
+out="$(printf '%s' '{"tool_name":"Agent","tool_input":{},"session_id":"sess-3","transcript_path":"'"$TMP/proj/sess-3.jsonl"'"}' | SPAWN_GUARD_SESSION_BUDGET=0 python3 "$GUARD")"
+echo "$out" | grep -q 'budget' && ok "budget 0 freezes a virgin session" || bad "budget-0 virgin session (out=$out)"
+
 # 10. blocklist: observer-flagged session denied outright
 echo "sess-1" > "$HOME/.claude/spawn-guard.blocklist"
 run deny "blocklisted session denied all spawning" \

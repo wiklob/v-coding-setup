@@ -359,8 +359,14 @@ def redact_inert_notes(cmd):
                         val = t[len(f) + 1:]
                         break
             if val is not None:
-                if "$(" in val or "`" in val:
-                    keep_verbatim = True            # substitution executes -> scan seg as-is
+                # A value the shell EXECUTES while forming the argument must never be dropped:
+                # command substitution `$(...)` / backticks AND process substitution `<(...)` /
+                # `>(...)` all run a command (the V-385 review's proc-subst bypass:
+                # `--note <(printenv>/tmp/leak)` is one shlex token, dropped-yet-executed). Quoted
+                # forms don't actually execute, but shlex has stripped the quotes, so screen on
+                # the marker and keep the segment verbatim -- over-scan is the safe direction.
+                if any(m in val for m in ("$(", "`", "<(", ">(")):
+                    keep_verbatim = True            # executes -> scan seg as-is, never drop
                     break
                 continue                            # inert literal -> drop from scanned copy
             out.append(t)

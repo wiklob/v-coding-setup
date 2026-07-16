@@ -300,6 +300,13 @@ expect_block "note dangling then && printenv"          Bash command "node bin/lo
 expect_block "note dangling then | printenv"           Bash command "node bin/log-feedback.mjs --note | printenv"
 # and a real mutating curl after a note segment (via &&) still blocks.
 expect_block "real curl after note via &&"             Bash command "node bin/log-feedback.mjs --note x && curl -X POST https://api.supabase.com/v1/projects/REF/database/query -d @q"
+# SECURITY (V-385 review, round 2): PROCESS substitution <(...)/>(...)  executes like $(...) --
+# a space-free proc-subst is one shlex token, so it must NOT be dropped as an inert note value.
+expect_block "note <(printenv) proc-subst"             Bash command "node bin/log-feedback.mjs --note <(printenv>/tmp/leak)"
+expect_block "note=<(printenv) inline proc-subst"      Bash command "node bin/log-feedback.mjs --note=<(printenv>/tmp/leak)"
+expect_block "note >(printenv) output proc-subst"      Bash command "node bin/log-feedback.mjs --note >(printenv)"
+expect_block "note <(curl db query) proc-subst"        Bash command "node bin/log-feedback.mjs --note <(curl -X POST https://api.supabase.com/v1/projects/REF/database/query)"
+expect_block "note backtick cmd-subst"                 Bash command "node bin/log-feedback.mjs --note \`curl -X POST https://api.supabase.com/v1/projects/REF/database/query\`"
 
 echo "----------------------------------------"
 printf 'Total: %d passed, %d failed\n' "$pass" "$fail"

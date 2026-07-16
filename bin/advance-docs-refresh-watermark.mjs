@@ -15,14 +15,21 @@
 //   `node ~/.claude/bin/advance-docs-refresh-watermark.mjs` is covered by the blanket
 //   `Bash(node ~/.claude/bin/*.mjs)` allow rule — prompt-free, unattended.
 //
-// PATH TARGETING:
-//   The watermark must live in the ONE canonical checkout, not a throwaway worktree's
-//   copy. The path is resolved relative to THIS file's bin/ location via fileURLToPath —
-//   so the write always lands on <root>/pipeline/audit/.docs-refresh-watermark regardless
-//   of caller cwd.
+// PATH TARGETING (V-375 — per-repo):
+//   The watermark bounds ONE repo's review window: it records that repo's own
+//   origin/<base> SHA, so N repos swept by the one machine-global runner must each keep
+//   their OWN watermark — a shared file would let one repo's SHA silently skip or
+//   re-review another's merged work (convention 8). So the target repo root is passed
+//   explicitly via --repo-root and the write lands at <repo-root>/pipeline/audit/.docs-refresh-watermark.
+//   When --repo-root is omitted, it defaults to THIS file's own checkout (resolved
+//   relative to bin/ via fileURLToPath) — the historical single-repo behavior, so an
+//   existing caller that passes only --commit is unchanged. A relative or non-existent
+//   --repo-root is rejected (exit 3) rather than writing under an unintended tree: the
+//   root must be an ABSOLUTE path to an existing directory (the runner passes each swept
+//   checkout's own absolute path).
 //
 // USAGE:
-//   node ~/.claude/bin/advance-docs-refresh-watermark.mjs --commit <sha>
+//   node ~/.claude/bin/advance-docs-refresh-watermark.mjs --commit <sha> [--repo-root <abs-dir>]
 //
 //   --commit is the origin/<base> SHA at the reviewed window's end (the point up to which
 //   /docs-refresh has reviewed the day's merged changes). The written file is a single
@@ -31,22 +38,47 @@
 //   rather than writing garbage (convention 8: the watermark bounds the review window; a
 //   wrong one silently re-reviews or skips merged work).
 //
-// Exit codes: 0 success · 2 bad/missing --commit (surfaced, never a silent garbage write).
+//   --repo-root is the ABSOLUTE path of the checkout whose watermark to advance. Omitted
+//   → this file's own checkout (single-repo default). A relative or missing directory
+//   fails loud (exit 3) rather than writing somewhere unintended.
+//
+// Exit codes: 0 success · 2 bad/missing --commit · 3 bad --repo-root (relative or absent).
+//   Every non-zero is a surfaced failure, never a silent garbage write.
 
-import { writeFileSync, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { writeFileSync, mkdirSync, existsSync, statSync } from "node:fs";
+import { dirname, join, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// This file lives at <root>/bin/, the watermark at <root>/pipeline/audit/.
-export function resolveWatermarkPath() {
-  return join(dirname(fileURLToPath(import.meta.url)), "..", "pipeline", "audit", ".docs-refresh-watermark");
+// The checkout this file lives in: <root>/bin/ → <root>. The single-repo default when
+// no --repo-root is passed.
+export function ownRepoRoot() {
+  return join(dirname(fileURLToPath(import.meta.url)), "..");
 }
 
-// Flag parser. Only --commit is meaningful.
+// Resolve the watermark path under a given repo root (default: this file's own checkout).
+// Every root — passed or defaulted — resolves the same fixed relative suffix, so two
+// distinct roots can never collide on one file.
+export function resolveWatermarkPath(repoRoot) {
+  const root = repoRoot === undefined || repoRoot === null ? ownRepoRoot() : repoRoot;
+  return join(root, "pipeline", "audit", ".docs-refresh-watermark");
+}
+
+// Validate a --repo-root value: must be absolute + an existing directory. Returns the
+// root string when valid, else null (caller surfaces + exits 3). Omitted (undefined) is
+// valid — it means "use the single-repo default", handled by the caller.
+export function validateRepoRoot(repoRoot) {
+  if (repoRoot === undefined) return undefined;              // omitted → default, not an error
+  if (typeof repoRoot !== "string" || !isAbsolute(repoRoot)) return null;
+  try { if (!statSync(repoRoot).isDirectory()) return null; } catch { return null; }
+  return repoRoot;
+}
+
+// Flag parser. --commit (the SHA) and optional --repo-root (the target checkout).
 export function parseFlags(argv) {
   const f = {};
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--commit") f.commit = argv[++i];
+    else if (argv[i] === "--repo-root") f.repoRoot = argv[++i];
   }
   return f;
 }
@@ -62,13 +94,18 @@ export function formatWatermark(commit) {
 }
 
 function main() {
-  const { commit } = parseFlags(process.argv.slice(2));
+  const { commit, repoRoot } = parseFlags(process.argv.slice(2));
   const content = formatWatermark(commit);
   if (content === null) {
     process.stderr.write(`advance-docs-refresh-watermark: --commit "${commit}" is not a valid git SHA (7–40 hex)\n`);
     process.exit(2);
   }
-  const path = resolveWatermarkPath();
+  const validRoot = validateRepoRoot(repoRoot);
+  if (validRoot === null) {
+    process.stderr.write(`advance-docs-refresh-watermark: --repo-root "${repoRoot}" must be an absolute path to an existing directory\n`);
+    process.exit(3);
+  }
+  const path = resolveWatermarkPath(validRoot);
   mkdirSync(dirname(path), { recursive: true }); // idempotent — never prompts
   writeFileSync(path, content);
   // Read-back observability (convention 8): echo what landed where.

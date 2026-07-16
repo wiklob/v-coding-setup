@@ -12,3 +12,7 @@ dist/
 
 # macOS
 .DS_Store
+
+# Per-ticket build plans are local working artifacts (carry Linear URLs/ticket detail);
+# they stay out of the public repo. The meta extraction plan docs/plan.md is tracked.
+docs/plans/

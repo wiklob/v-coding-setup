@@ -9,6 +9,14 @@
   "deferredChecksProject": "deferred checks",
   "deferredChecksBucket": { "name": "deferred checks", "team": "<owning team>", "id": "<project-uuid>" },
   "deployedServices": [],
+  "docs": {
+    "maintenance": "per-land",
+    "changelog": "docs/changelog.md",
+    "postponed": "docs/postponed.md",
+    "systemDocs": [
+      { "doc": "docs/architecture.md", "covers": ["src/"] }
+    ]
+  },
   "objectivesRegistry": "~/.claude/pipeline/objectives.md",
   "designDoctrine": [],
   "landscapeTeams": [
@@ -20,5 +28,5 @@
     "team": "<product team name>",
     "inboxState": "Todo"
   },
-  "notes": "Per-repo binding for the ticket-flow commands (/next-ticket, /scope, /build, /land-ticket, /spawn-tickets, /harvest-*, /capture, /align, /refresh-landscape, /trace-audit). Copy to <repo>/.claude/ticket-flow.json and fill in — or run /ticket-flow-init, which detects most of it. Key notes: bugBucket/deferredChecksBucket must already exist in Linear under their OWNING team (create once, apply the 'parallel' project label in Linear's UI — project labels are UI-only). landscapeTeams is the in-scope team set /refresh-landscape + /trace-audit sweep (omit to fall back to linearTeam). intake is the /capture + /align funnel binding (omit if you don't run a product-idea funnel). deployedServices is the /land-ticket §6.7b redeploy ack-gate registry — declare per-service {name, covers, redeploy, verify} in each DEPLOYING repo, keep [] in repos that deploy nothing. objectivesRegistry is the canonical co-mingled KB hub path; leave as ~/.claude/pipeline/objectives.md unless you relocate the KB. requiredCheck (optional, omitted here) names a CI check /land-ticket's merge gate waits for in repos with branch protection."
+  "notes": "Per-repo binding for the ticket-flow commands (/next-ticket, /scope, /build, /land-ticket, /spawn-tickets, /harvest-*, /capture, /align, /refresh-landscape, /trace-audit). Copy to <repo>/.claude/ticket-flow.json and fill in — or run /ticket-flow-init, which detects most of it. Key notes: bugBucket/deferredChecksBucket must already exist in Linear under their OWNING team (create once, apply the 'parallel' project label in Linear's UI — project labels are UI-only). landscapeTeams is the in-scope team set /refresh-landscape + /trace-audit sweep (omit to fall back to linearTeam). intake is the /capture + /align funnel binding (omit if you don't run a product-idea funnel). deployedServices is the /land-ticket §6.7b redeploy ack-gate registry — declare per-service {name, covers, redeploy, verify} in each DEPLOYING repo, keep [] in repos that deploy nothing. docs is convention 6's documentation-lifecycle binding (omit for no docs hooks): maintenance 'per-land' (default) does per-PR doc work in /land-ticket, 'daily' defers it to the machine-global docs-refresh agent — a checkout opts into that sweep by BOTH setting maintenance:'daily' here AND being listed in ~/.claude/docs-refresh-repos.txt. objectivesRegistry is the canonical co-mingled KB hub path; leave as ~/.claude/pipeline/objectives.md unless you relocate the KB. requiredCheck (optional, omitted here) names a CI check /land-ticket's merge gate waits for in repos with branch protection."
 }

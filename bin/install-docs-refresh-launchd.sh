@@ -6,10 +6,15 @@
 #   SKIPS the missed slot. launchd's StartCalendarInterval runs a missed calendar slot on the NEXT
 #   WAKE (missed slots coalesce to one run) — what a daily doc pass on a frequently-asleep laptop needs.
 #
-# WHY LOCAL (not a remote /schedule routine): /docs-refresh reviews the local repo's git history
-#   since a per-machine watermark (~/.claude/pipeline/audit/.docs-refresh-watermark) and applies doc
-#   updates to the working tree before opening its daily PR. Only a process on THIS machine can see
-#   that checkout.
+# WHY LOCAL (not a remote /schedule routine): /docs-refresh reviews a local checkout's git history
+#   since a per-machine watermark and applies doc updates to the working tree before opening its
+#   daily PR. Only a process on THIS machine can see those checkouts.
+#
+# ONE MACHINE-GLOBAL AGENT, MANY REPOS (V-375): this installs a SINGLE agent whose runner
+#   (bin/docs-refresh-runner.sh) sweeps every checkout that opts into `docs.maintenance: "daily"` —
+#   ~/.claude always, plus any absolute path listed in ~/.claude/docs-refresh-repos.txt. The runner
+#   filters by each repo's own ticket-flow.json and keeps a per-repo watermark, so adding a repo is a
+#   registry-file edit, NOT another launchd agent. Nothing here is repo-specific; the plist is generic.
 #
 # SCHEDULE: daily 09:47 local — after the morning cluster (09:07 bugs, 09:17 feedback, 09:27 plan/brief)
 #   so the jobs don't fire at the same instant and the doc pass runs once the day's earlier rituals

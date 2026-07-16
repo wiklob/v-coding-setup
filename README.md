@@ -66,6 +66,8 @@ The permission stance is *allow-broad, block-narrow*, enforced in layers: settin
 
 Install each with its `bin/install-*-launchd.sh`; every runner heartbeats to a log so silent non-execution is distinguishable from "never fired".
 
+**docs-refresh is multi-repo.** The one `docs-refresh` agent sweeps every checkout that opts into daily doc maintenance — `~/.claude` always, plus any absolute path listed one-per-line in `~/.claude/docs-refresh-repos.txt` (`#` comments allowed). A checkout opts in by setting `docs.maintenance: "daily"` in its `.claude/ticket-flow.json` (see the `docs` block in `.claude/ticket-flow.example.json`); a repo left at the default `"per-land"` is skipped, and does its doc upkeep at land time instead. Each repo keeps its own review watermark and gets its own daily PR; a failure in one repo never blocks the rest. Adding a repo is a one-line registry edit, not another agent.
+
 ## Testing
 
 ```bash

@@ -58,10 +58,10 @@ def deny(reason):
     sys.exit(0)
 
 
-def env_int(name, default):
+def env_int(name, default, floor=1):
     try:
         v = int(os.environ.get(name, ""))
-        return v if v >= 1 else default
+        return v if v >= floor else default
     except ValueError:
         return default
 
@@ -123,10 +123,15 @@ def run():
              "raise SPAWN_GUARD_MAX_DEPTH for a legitimately deeper run."
              % (depth, max_depth))
 
-    budget = env_int("SPAWN_GUARD_SESSION_BUDGET", SESSION_BUDGET_DEFAULT)
+    # floor 0: an explicit budget of 0 is a legitimate hard freeze
+    budget = env_int("SPAWN_GUARD_SESSION_BUDGET", SESSION_BUDGET_DEFAULT, floor=0)
     d = subagents_dir(event)
-    if d and os.path.isdir(d):
-        spawned = len(glob.glob(os.path.join(d, "agent-*.meta.json")))
+    if d:
+        # an absent dir means zero spawned so far — still compared, so a
+        # budget of 0 denies even the session's very first spawn (live-drill
+        # finding 2026-07-16: isdir-gating silently skipped that case)
+        spawned = (len(glob.glob(os.path.join(d, "agent-*.meta.json")))
+                   if os.path.isdir(d) else 0)
         if spawned >= budget:
             deny("spawn-guard: this session already spawned %d agents — the "
                  "per-session budget (%d) is exhausted. Do NOT spawn more or retry; "

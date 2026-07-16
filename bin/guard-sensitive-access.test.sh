@@ -266,6 +266,30 @@ expect_allow "echo prose names .envrc+cat"        Bash command "echo see .envrc 
 expect_block "xargs -I {} cat placeholder form"   Bash command "echo .envrc | xargs -I {} cat {}"
 expect_block "xargs -I % cat placeholder form"    Bash command "find . -name .env | xargs -I % cat %"
 
+echo
+echo "== V-385: curl -G/--get analytics reads pass; mutations stay gated (endpoint+method-specific) =="
+# Read-only analytics/logs GET: -G/--get moves --data* into the query string -> a GET, must ALLOW.
+expect_allow "curl -G --data-urlencode analytics"   Bash command "curl -G --data-urlencode 'sql=select 1' https://api.supabase.com/v1/projects/REF/analytics/endpoints/logs.all -H \"Authorization: Bearer \$SUPABASE_ACCESS_TOKEN\""
+expect_allow "curl --get long-flag analytics"       Bash command "curl --get --data-urlencode 'sql=select 1' https://api.supabase.com/v1/projects/REF/analytics/endpoints/logs.all"
+expect_allow "explicit -X GET with body flag"        Bash command "curl -X GET --data-urlencode 'sql=x' https://api.supabase.com/v1/projects/REF/analytics/endpoints/logs.all"
+expect_allow "reordered: body flag before -G"        Bash command "curl --data-urlencode 'sql=x' -G https://api.supabase.com/v1/projects/REF/analytics/endpoints/logs.all"
+# Mutation-capable endpoints stay gated -- method-specific (explicit write -X still asks even with -G).
+expect_ask   "config -X POST with body still asks"   Bash command "curl -X POST https://api.supabase.com/v1/projects/REF/config/auth -d '{}'"
+expect_ask   "config -G -X POST still asks"          Bash command "curl -G -X POST https://api.supabase.com/v1/projects/REF/config/auth --data-urlencode x=1"
+expect_ask   "config plain --data-urlencode asks"    Bash command "curl --data-urlencode x=1 https://api.supabase.com/v1/projects/REF/config/auth"
+# Mutation-capable endpoint stays gated -- endpoint-specific (database/query hard-DENYs regardless of -G).
+expect_block "database/query -G still blocks"        Bash command "curl -G --data-urlencode 'query=DROP TABLE t' https://api.supabase.com/v1/projects/REF/database/query"
+
+echo
+echo "== V-385: a command QUOTED inside a note-logger --note/--message is inert text, not an API call =="
+expect_allow "log-feedback --note quoting curl+dbquery" Bash command "node bin/log-feedback.mjs --note \"curl -X POST https://api.supabase.com/v1/projects/REF/database/query -d @q\""
+expect_allow "log-input-request --message quoting curl" Bash command "node bin/log-input-request.mjs --message \"tried curl -G ... /database/query and it was gated\""
+expect_allow "note-logger --note=inline form"          Bash command "node bin/log-feedback.mjs --note=\"curl -X POST https://api.supabase.com/v1/projects/REF/database/query\""
+# SECURITY: a note value with command substitution EXECUTES -> must NOT be redacted, must BLOCK.
+expect_block "note with \$(...) substitution blocks"   Bash command "node bin/log-feedback.mjs --note \"\$(curl -X POST https://api.supabase.com/v1/projects/REF/database/query)\""
+# SECURITY: a real curl segment CHAINED after a note call still blocks (per-segment scans original).
+expect_block "real curl chained after note blocks"     Bash command "node bin/log-feedback.mjs --note foo; curl -X POST https://api.supabase.com/v1/projects/REF/database/query -d @q"
+
 echo "----------------------------------------"
 printf 'Total: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1

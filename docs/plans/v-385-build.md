@@ -1,7 +1,7 @@
 # Build plan: V-385 — Treat curl --get analytics queries as reads in guard-sensitive-access
 Status: ready
 Created: 2026-07-16 by /scope
-Ticket: https://linear.app/wiklob/issue/V-385/treat-curl-get-analytics-queries-as-reads-in-guard-secret-access
+Ticket: V-385 (Linear; private workspace)
 Parent plan: none — standalone (bugs bucket)
 
 ## Goal

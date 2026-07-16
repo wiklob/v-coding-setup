@@ -1,7 +1,7 @@
 # Build plan: V-371 — /go planning-first run design with real human design-choice checkpoints
 Status: ready
 Created: 2026-07-15 by /scope
-Ticket: https://linear.app/wiklob/issue/V-371/go-planning-first-run-design-with-real-human-design-choice-checkpoints
+Ticket: V-371 (Linear; private workspace)
 Parent plan: none — standalone
 
 ## Goal

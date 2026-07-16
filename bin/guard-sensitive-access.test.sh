@@ -183,6 +183,18 @@ expect_ask   "bin/sb-push --apply mid-&&-chain"      Bash command "echo hi && bi
 expect_allow "sb-push dry-run (no --apply)"          Bash command "cd /tmp; ~/.claude/bin/sb-push 2>&1 | tail"
 
 echo
+echo "== V-395: destructive supabase db subcommands MUST ask (empirical item-2 probe) =="
+# Item 2: prove empirically (not artifact-presence) that `supabase db reset` raises the ask,
+# incl. `--linked` (resets the REMOTE prod DB) and buried mid-chain. Non-destructive db
+# verbs (dump/diff/pull) stay allowed — the gate is the destructive family, not all of `db`.
+expect_ask   "supabase db reset --linked"            Bash command "supabase db reset --linked"
+expect_ask   "supabase db reset (bare)"              Bash command "supabase db reset"
+expect_ask   "supabase db reset via printf-yes pipe" Bash command "printf 'y\\n' | supabase db reset --linked"
+expect_ask   "supabase db push --linked"             Bash command "supabase db push --linked"
+expect_allow "supabase db dump (non-destructive)"    Bash command "supabase db dump -f schema.sql"
+expect_allow "supabase db diff (non-destructive)"    Bash command "supabase db diff"
+
+echo
 echo "== V-332: WRITE/CLOBBER of a secret file MUST block =="
 # The disaster: a `cd <wt>` that silently FAILED left cwd in MAIN, and the following
 # `ln -sf <main>/.envrc .envrc` (RELATIVE link name) then `-f`-unlinked the real .envrc.

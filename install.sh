@@ -85,7 +85,7 @@ say ""
 [ -d "$TARGET" ] || act "mkdir   target" mkdir -p "$TARGET"
 
 # --- 1. Engine: per-file symlinks/copies -------------------------------------
-ENGINE_DIRS="bin commands craft memory templates scripts docs"
+ENGINE_DIRS="bin commands craft memory templates scripts docs models"
 for d in $ENGINE_DIRS; do
   ( cd "$SRC" && find "$d" -type f ! -name '.DS_Store' ) | while IFS= read -r rel; do
     install_engine_file "$rel"

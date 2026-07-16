@@ -84,7 +84,7 @@ model-router install-launchd     # daemon on localhost:8399, survives reboots
 
 Point every session at it once — in `~/.claude/settings.json`: `"env": { "ANTHROPIC_BASE_URL": "http://localhost:8399" }`. Model choice is then per-conversation from any launcher (terminal, agents view, background jobs): `claude --model <id>` at launch or `/model <id>` mid-session.
 
-Per convention 12, author a posture profile (`pipeline/profiles/<model>.md`) for each model you run — until then sessions use the conservative default. Details + caveats: [docs/multi-model-support.md](docs/multi-model-support.md).
+Per convention 12, author a posture profile (`pipeline/profiles/<model>.md`) for each model you run — until then sessions use the conservative default. To run a routed model at its full window, append `[1m]` (`claude --model 'gpt-5.6-sol[1m]'`); its verified capacity + provenance live in `models/custom-models.json` (validated by `bin/custom-model-metadata.mjs`, which won't recommend extended mode until a probe proves the route past 200K). Details + caveats: [docs/multi-model-support.md](docs/multi-model-support.md).
 
 ## Relationship to linear-mcp-lean
 

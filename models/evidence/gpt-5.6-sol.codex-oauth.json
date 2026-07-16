@@ -1,0 +1,43 @@
+{
+  "ticket": "V-383",
+  "model": "gpt-5.6-sol",
+  "route": "codex-oauth-cliproxy",
+  "gateway": "CLIProxyAPI",
+  "authentication": "codex-oauth-subscription",
+  "claudeCodeVersion": "2.1.204",
+  "producedBy": "bin/probe-custom-model-context.mjs",
+  "notes": "Non-secret probe results for V-383. No prompt/response bodies, headers, or credentials are stored. Reproduce with the commands in docs/gpt-5.6-sol-context.md.",
+
+  "capture": {
+    "description": "Proof Claude Code strips the [1m] suffix client-side. A disposable loopback Anthropic-API server received the request; the wire model id had no suffix.",
+    "capturedAt": "2026-07-16",
+    "requestedModelId": "gpt-5.6-sol[1m]",
+    "observedWireModelId": "gpt-5.6-sol",
+    "suffixStrippedUpstream": true,
+    "pass": true
+  },
+
+  "contextWindow": {
+    "description": "Claude Code's own per-session budget for the [1m] session, read programmatically from modelUsage in `claude --print --output-format json` (NOT the /context display).",
+    "observedAt": "2026-07-16",
+    "modelUsageKey": "gpt-5.6-sol[1m]",
+    "budgetedInputTokens": 1000000,
+    "maxOutputTokens": 32000,
+    "source": "modelUsage.contextWindow"
+  },
+
+  "live": {
+    "description": "Proof the Codex OAuth / CLIProxy route accepts a single request past the 200K gateway floor. A deterministic filler prompt was sent through the normal router; the model returned the sentinel and reported input usage far above 200K, with no truncation or context-length error.",
+    "verifiedAt": "2026-07-16",
+    "observedWireModelId": "gpt-5.6-sol",
+    "gatewayFloor": 200000,
+    "observedInputTokens": 336494,
+    "sentinelReturned": true,
+    "completed": true,
+    "promptGenerator": {
+      "targetWords": 150001,
+      "seed": "v-383",
+      "sha256": "81e7c9a657f8c171e684e3a13a76d0a438f0997010c106deefaf3a81147efd89"
+    }
+  }
+}

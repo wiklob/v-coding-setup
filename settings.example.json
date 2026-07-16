@@ -83,7 +83,6 @@
       "mcp__linear__create_attachment_from_upload",
       "mcp__linear__prepare_attachment_upload",
       "mcp__linear__linear_graphql",
-      "Write(~/*-claude-wt-*/.claude/active-project.json)",
       "Edit(~/.claude/pipeline/audit/**)",
       "Write(~/.claude/pipeline/audit/**)"
     ],

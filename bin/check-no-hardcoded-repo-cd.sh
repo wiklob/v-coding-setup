@@ -51,7 +51,7 @@ HOME_RE="$(printf '%s' "$HOME" | sed -e 's/[][\/.^$*+?(){}|\\]/\\&/g')"
 NAME_RE="$(printf '%s' "$REPO_NAME" | sed -e 's/[][\/.^$*+?(){}|\\]/\\&/g')"
 
 # A `cd` whose target is exactly $HOME or $HOME/<repo-name> (optionally quoted),
-# bounded so longer valid paths ($HOME/.claude, $HOME/-claude-wt-*, $HOME/Downloads)
+# bounded so longer valid paths ($HOME/.claude, managed repo worktrees, $HOME/Downloads)
 # do NOT match.
 PATTERN="(^|[^[:alnum:]_/])cd[[:space:]]+[\"']?${HOME_RE}(/${NAME_RE})?([[:space:]\"'&|;)]|\$)"
 
@@ -67,7 +67,7 @@ should_match=(
 should_not_match=(
   "cd $HOME/.claude"
   "git -C $HOME/.claude log"
-  "cd $HOME/-claude-wt-v-74"
+  "cd $HOME/projects/other-checkout/.claude/worktrees/other-checkout-wt-v-74"
   "cd $HOME/projects/other-checkout"
   'root="$(git rev-parse --show-toplevel)"'
 )

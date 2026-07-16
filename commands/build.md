@@ -39,7 +39,7 @@ Multiple flags compose. Default (no flags) = run all phases through §7 hand-off
 
 ## 1. Load context
 
-- Read `$WT_ABS/.claude/active-project.json`. Branch on mode:
+- Run `node ~/.claude/bin/ticket-worktree.mjs migrate-binding --worktree "$WT_ABS"` before reading binding state; malformed/conflicting legacy state hard-STOPs. Then read with `node ~/.claude/bin/ticket-worktree.mjs read-binding --worktree "$WT_ABS"`. Branch on the returned JSON mode (no direct legacy-marker access):
   - **Standalone mode** (`mode: "standalone"`): active ticket = `binding.linearIssue`.
   - **Feature mode** (has `linearProject` + `planSlug`): active ticket = the In Progress issue in the bound project assigned to me. One `mcp__linear list_issues` (`project: <bound> state: "In Progress" assignee: "me" limit: 3`); match the issue whose `gitBranchName` equals `git -C "$WT_ABS" branch --show-current`. Per `/next-ticket`'s In-Progress guard there should be exactly one — 0 means preflight will fail at §2, >1 means drift (STOP, surface).
 - `mcp__linear get_issue` on the active ticket. Capture: title, description (Goal + Acceptance), `gitBranchName`, state, parent project.

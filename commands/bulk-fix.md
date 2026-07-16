@@ -11,7 +11,7 @@ Use this when you have many small atomic tickets in a standalone bucket `<bucket
 **Targets a registered standalone bucket — never feature projects.** Read `~/.claude/workflow-conventions.md` first.
 
 ## Load config
-- `root="$(git rev-parse --show-toplevel)"`; read `$root/.claude/ticket-flow.json`. Missing → `/ticket-flow-init`, STOP.
+- `root="$(git rev-parse --show-toplevel)"`; this exact command-launch checkout is the explicit `sourceRoot` for every transient worktree helper call below — never use the common Git dir or first worktree-list row. Read `$root/.claude/ticket-flow.json`. Missing → `/ticket-flow-init`, STOP.
 - Required fields: `linearTeam`, `scopeLabel`, `baseBranch`, **`standaloneProject`**. If `standaloneProject` is unset → STOP, tell user to set it (the bucket is the input source). `requiredCheck` is **optional** — when the repo omits it (e.g. a no-CI repo like `~/.claude` itself), the per-commit required-check step (§4) is skipped rather than run on an empty check.
 - **Resolve the target bucket `<bucket>`** (the multi-bucket extension):
   - No `--project` → `<bucket>` = `cfg.standaloneProject` (the primary; unchanged default behavior).
@@ -65,12 +65,17 @@ Spawn one `Agent` subagent per group, **in parallel** (single tool-use block wit
 You are an executor running bulk auto-apply for ONE group of standalone bucket tickets.
 
 # Working dir
-Create a transient worktree:
-  git -C "<REPO_ROOT>" worktree add "../<repo-basename-sanitized>-wt-bulkfix-<GROUP_SLUG>" origin/<BASE_BRANCH>
-cd into it. Bootstrap deps (`npm ci` if package-lock.json, else `npm install`, or repo's documented equivalent — REQUIRED to avoid the bare-npx-tsc false-green trap per workflow-conventions.md convention 5).
+`<REPO_ROOT>` is the explicit command-launch `sourceRoot`. Resolve the unchanged transient basename and managed/legacy paths through the installed helper:
+  node ~/.claude/bin/ticket-worktree.mjs resolve --root "<REPO_ROOT>" --mode standalone --issue "bulkfix-<GROUP_SLUG>"
+Read the JSON in-context and capture `managedPath`, `legacyPath`, `preferredPath`, and `layout`; the resulting basename remains `<repo-basename-sanitized>-wt-bulkfix-<GROUP_SLUG>`. Classify both paths against `git -C "<REPO_ROOT>" worktree list --porcelain` and the filesystem. Both registered, a registered path plus an occupied conflicting path, or an unregistered occupied create target hard-STOP this group safely. A single registered transient surfaces as prior state rather than being overwritten. For an ordinary repo with a registered legacy sibling and an absent managed target, migrate outside-in with:
+  node ~/.claude/bin/ticket-worktree.mjs move-legacy --root "<REPO_ROOT>" --legacy "<legacyPath>" --managed "<managedPath>"
+Never move it when the caller is inside it (`deferred-current-worktree` keeps the legacy path), and never migrate the exact `~/.claude` source's sibling fallback. A previously registered transient still surfaces as existing state rather than being overwritten. When neither path is registered and the preferred target is absent, prepare its parent through the helper, then create it:
+  node ~/.claude/bin/ticket-worktree.mjs prepare-parent --path "<preferredPath>"
+  git -C "<REPO_ROOT>" worktree add "<preferredPath>" origin/<BASE_BRANCH>
+Use the resolved/moved path as `<WORKTREE_PATH>` for every later command and return it to the parent. Work from that path and bootstrap deps there (`npm ci` if package-lock.json, else `npm install`, or repo's documented equivalent — REQUIRED to avoid the bare-npx-tsc false-green trap per workflow-conventions.md convention 5).
 
 # Branch
-git switch -c bulk/<GROUP_SLUG>
+git -C "<WORKTREE_PATH>" switch -c bulk/<GROUP_SLUG>
 
 # Tickets (ordered: by file path, then by line number)
 <TICKETS_JSON>  — array of { id, description (full ticket body with file:line + action), priority }
@@ -84,7 +89,7 @@ git switch -c bulk/<GROUP_SLUG>
 
 # After all tickets processed
 - If ≥1 commit landed: push branch (`git push -u origin bulk/<GROUP_SLUG>`), open PR with `gh pr create --base <BASE_BRANCH>`. Title: `bulk: <group description>`. Body: a **non-closing** `Part of <ID>` line per committed ticket + a "Skipped (needs-eyes)" section listing each skipped ticket + reason. Run `pr-close-guard --body-file <body-file>` on the body before `gh pr create` and abort on non-zero — no closing keyword may reach the PR (the committed tickets are closed explicitly in §6).
-- If 0 commits landed (entire group went needs-eyes): destroy the worktree (`git worktree remove`), don't open a PR, return needs-eyes list only.
+- If 0 commits landed (entire group went needs-eyes): destroy the exact resolved worktree (`git -C "<REPO_ROOT>" worktree remove "<WORKTREE_PATH>"`), don't open a PR, return needs-eyes list only.
 
 # Don't
 - Don't transition Linear state during the per-ticket subagent run (steps 1–5). The explicit close happens once, in §6, after the group's PR actually merges (no magic-word auto-close).
@@ -110,7 +115,7 @@ For each approved group's PR, sequentially:
 - Verify `<requiredCheck>` is green (`pr-health <n>` shows the check rollup; poll if pending).
 - `gh pr merge <n> --merge` (**no `--delete-branch`** — it fails when `main` is checked out in another worktree, though the merge itself lands; branch teardown is explicit at the worktree-removal step below).
 - **Close the group's committed tickets explicitly** — merge transitions nothing (no closing keyword in the PR): for each committed ticket `mcp__linear save_issue` state Done with a one-line summary comment. This is the sole close path.
-- Remove the transient worktree, then delete its now-free branch — **order matters:** git refuses to `branch -D` a branch still checked out in a worktree, so remove the worktree first. As discrete calls: `git worktree remove ../<repo>-wt-bulkfix-<GROUP_SLUG>`, then `git branch -D <group head-branch>` (local), then `git push origin --delete <group head-branch>` (remote — what `--delete-branch` used to do). Run the branch ops from the main checkout.
+- Remove the transient worktree at the exact `<WORKTREE_PATH>` returned by the group subagent, then delete its now-free branch — **order matters:** git refuses to `branch -D` a branch still checked out in a worktree, so remove the worktree first. As discrete calls from the command-launch source checkout: `git -C "<REPO_ROOT>" worktree remove "<WORKTREE_PATH>"`, then `git -C "<REPO_ROOT>" branch -D <group head-branch>` (local), then `git -C "<REPO_ROOT>" push origin --delete <group head-branch>` (remote — what `--delete-branch` used to do). Never reconstruct a sibling path during teardown.
 
 For denied groups: leave the PR open + worktree intact. User can attend manually later.
 

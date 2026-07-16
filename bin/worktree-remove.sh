@@ -23,8 +23,9 @@ set -u
 
 wt="${1:?usage: worktree-remove.sh <worktree-path>}"
 
-# `--` stops option parsing: this repo's worktrees are named `-claude-wt-*` (leading
-# dash), which git would otherwise treat as a flag (V-36).
+# `--` stops option parsing for arbitrary paths, including historical legacy
+# sibling names that began with a dash (V-36). Managed worktree names do not rely
+# on that legacy shape, but teardown stays defensive during migration.
 out="$(git worktree remove -- "$wt" 2>&1)"
 rc=$?
 

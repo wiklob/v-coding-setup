@@ -2,8 +2,10 @@
 # Bootstrap per-worktree Claude permissions.
 #
 # Runs as a SessionStart hook (configured in ~/.claude/settings.json).
-# If $PWD is inside a Claude-managed worktree, drops a scoped
-# settings.local.json into that worktree's .claude/ directory:
+# Ordinary ticket worktrees live at <repo>/.claude/worktrees/<name>. During the
+# V-372/V-376 coexistence window, the exact legacy ~/.claude source checkout can
+# still use its sibling <repo>-wt-<slug> layout. If $PWD is inside either form,
+# drops a scoped settings.local.json into that worktree's .claude/ directory:
 #   - allows Edit/Write/MultiEdit only under the worktree subtree
 #   - denies edits of the settings file itself (Claude can't widen its scope)
 # Idempotent — exits silently if the file already exists or cwd is not a worktree.
@@ -21,15 +23,15 @@ while [[ "$dir" != "/" && -n "$dir" ]]; do
   parent_base="$(basename "$parent")"
   grandparent_base="$(basename "$(dirname "$parent")")"
 
-  # Pattern 1: <repo-basename>-wt-<slug>/ that is itself a git worktree
-  # (git worktrees have .git as a file pointing to ../main/.git/worktrees/<name>).
-  if [[ "$base" == *-wt-* ]] && { [[ -f "$dir/.git" ]] || [[ -d "$dir/.git" ]]; }; then
+  # Primary: ordinary managed layout, <repo>/.claude/worktrees/<name>/.
+  if [[ "$parent_base" == "worktrees" ]] && [[ "$grandparent_base" == ".claude" ]]; then
     wt_root="$dir"
     break
   fi
 
-  # Pattern 2: <repo>/.claude/worktrees/<name>/ (EnterWorktree-managed bg job).
-  if [[ "$parent_base" == "worktrees" ]] && [[ "$grandparent_base" == ".claude" ]]; then
+  # Legacy fallback: sibling <repo-basename>-wt-<slug>/ worktrees retained only
+  # for the exact ~/.claude source checkout until V-376 completes its cutover.
+  if [[ "$base" == *-wt-* ]] && { [[ -f "$dir/.git" ]] || [[ -d "$dir/.git" ]]; }; then
     wt_root="$dir"
     break
   fi

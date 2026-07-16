@@ -23,9 +23,9 @@ Claude Code's allowlist matches **full command strings**. A compound like `sleep
 2. **Single-shot binaries** → discrete Bash calls. Each call matches its own allowlist pattern (`gh *`, `git *`, `npx tsc *`, etc.). **Claude parses outputs in-context** — never pipe `gh --json` to `python3 -c` or `jq` from a skill; the skill's reasoning is the parser.
 
 ## Load config (required)
-- `cfg="$(git rev-parse --show-toplevel)/.claude/ticket-flow.json"`. Read it. If missing → tell the user to run `/ticket-flow-init`, STOP.
-- **Resolve the main checkout once:** `MAIN_WT="$(git worktree list --porcelain | sed -n '1s/^worktree //p')"` — the path every `git -C "<main worktree>"` op in §7–§8 (and the `<main worktree>/.claude/usage-stats/…` writes) targets. The **first porcelain entry is always the main worktree** (git lists it first even when invoked from a linked worktree), so this is repo-agnostic and always absolute. **Never** derive the main checkout from the repo slug (`~/<repo>`) or a `…/projects/<owner>-<repo>` path, and **never** use `git rev-parse --show-toplevel` for it — inside a ticket worktree that returns the *worktree*, not the main checkout. Everywhere below, `<main worktree>` = `$MAIN_WT`.
+- `launchRoot="$(git rev-parse --show-toplevel)"`; this is the exact command-launch checkout. `cfg="$launchRoot/.claude/ticket-flow.json"`. Read it. If missing → tell the user to run `/ticket-flow-init`, STOP. Never substitute the common Git directory or first worktree-list row for the launch checkout.
 - Fields: `linearTeam`, `scopeLabel`, `repo`, `baseBranch`, `requiredCheck`. Use these everywhere — never hardcode.
+- **Resolve the main checkout once by its configured base branch, not list order:** read `git -C "$launchRoot" worktree list --porcelain` in-context and select the sole entry whose `branch` line is exactly `refs/heads/<baseBranch>`; set its preceding absolute `worktree` path as `MAIN_WT`. Zero or multiple matches → STOP and surface rather than guessing. Never use the first porcelain row, the common Git dir, a repo-slug path, or a derived sibling. Everywhere below, `<main worktree>` = `$MAIN_WT`; the ticket worktree remains `$launchRoot`.
 - Default merge strategy: **squash** (`gh pr merge --squash`) — collapses each PR to a single commit on `<baseBranch>`, so history stays near-linear and merge commits stop accumulating (the V-244 hygiene fix — the human asked for *fewer merge commits*). The §7 teardown already assumes squash: it force-deletes the local branch (`branch -D`) precisely because a squash leaves the local tip a non-ancestor of `<baseBranch>`. Use a **merge commit** (`gh pr merge --merge`) only when asked, or when a multi-commit PR's individual-commit structure is genuinely worth preserving.
 
 ## 0. Publish if needed (absorbed ship step)
@@ -421,9 +421,9 @@ A merge lands code into `<baseBranch>`, but a **deployed service keeps serving i
 - Present (or gate skipped) → proceed to §7.
 
 ## 7. Post-merge cleanup (mode-aware — convention 5 + parallel-eligibility)
-**§6.8's deliverable gate must have passed (or been a no-op) before any teardown below runs.** Read `<worktree>/.claude/active-project.json` and branch on `mode`:
+**§6.8's deliverable gate must have passed (or been a no-op) before any teardown below runs.** On the ticket's actual head `<worktree>` recorded in §2, run `node ~/.claude/bin/ticket-worktree.mjs migrate-binding --worktree "<worktree>"` before normal binding read, then `node ~/.claude/bin/ticket-worktree.mjs read-binding --worktree "<worktree>"`; malformed/conflicting legacy state hard-STOPs. Branch on the returned `mode`. Never access the legacy checkout marker directly.
 
-> **Teardown never `cd`s into or checks out the main branch.** Every op that touches the main checkout uses `git -C "<main worktree>"` — where `<main worktree>` is `$MAIN_WT`, the resolver from "Load config" (`git worktree list --porcelain` first entry), **never** a slug-derived `~/<repo>` guess; never `git switch main` / `git checkout main` — `main` is already live in the main worktree, so checking it out from anywhere trips *"'main' is already checked out at <main>"*. To refresh main, **use the `refresh-main-ff.sh` helper below** (fetch + fast-forward in place, drift-preserving — never a blind `pull`, never `reset --hard`/force, which would discard the main checkout's local drift); to ready a *reused* project worktree for the next ticket, **detach** (`git switch --detach origin/<baseBranch>`, feature branch below) — never name the `main` branch in a checkout/switch.
+> **Teardown never `cd`s into or checks out the main branch.** Every op that touches the main checkout uses `git -C "<main worktree>"` — where `<main worktree>` is `$MAIN_WT`, resolved by the configured `<baseBranch>` entry in `git worktree list --porcelain`, **never** list order or a slug-derived `~/<repo>` guess; never `git switch main` / `git checkout main` — `main` is already live in the main worktree, so checking it out from anywhere trips *"'main' is already checked out at <main>"*. To refresh main, **use the `refresh-main-ff.sh` helper below** (fetch + fast-forward in place, drift-preserving — never a blind `pull`, never `reset --hard`/force, which would discard the main checkout's local drift); to ready a *reused* project worktree for the next ticket, **detach** (`git switch --detach origin/<baseBranch>`, feature branch below) — never name the `main` branch in a checkout/switch.
 
 **`mode: "standalone"`** (per-ticket worktree — covers both the `standaloneProject` bucket and any feature project carrying the Linear `parallel` project label; binding doesn't distinguish them, cleanup is identical):
 - Tear it down immediately on merge. **Order matters:** git refuses to `branch -D` a branch that is still checked out in a worktree — and with `--delete-branch` dropped from §6.7, nothing switches the standalone worktree off `<branch>` first — so the worktree must be **removed before** the branch is deleted. Run the steps below as **discrete** Bash calls (never `&&`-chained or padded — see the warning in the remove step):
@@ -470,7 +470,7 @@ node ~/.claude/bin/usage-stats.mjs --ticket <TICKET-ID> --pr <PR#>
 ```
 
 The helper:
-- Binds the **primary** session (whose totals are the headline) by IDENTITY, most-authoritative first: (1) explicit `--session <id>`; (2) the `SessionStart` capture-hook sidecar (`$CLAUDE_JOB_DIR/transcript.json` / `~/.claude/run/transcripts/<encoded-cwd>.json`) — harness-authoritative `transcript_path`, rewritten on every resume/compact; (3) id hints — `CLAUDE_CODE_SESSION_ID`, `state.resumeSessionId`, `state.sessionId`; (4) the resolver's **top content-matched** session. Never newest-`.jsonl`-in-dir, never a self-emitted marker.
+- Binds the **primary** session (whose totals are the headline) by IDENTITY, most-authoritative first: (1) explicit `--session <id>`; (2) the `SessionStart` capture-hook sidecar (`$CLAUDE_JOB_DIR/transcript.json` / `<home>/.claude/run/transcripts/<encoded-cwd>.json`) — harness-authoritative `transcript_path`, rewritten on every resume/compact; (3) id hints — `CLAUDE_CODE_SESSION_ID`, `state.resumeSessionId`, `state.sessionId`; (4) the resolver's **top content-matched** session. Never newest-`.jsonl`-in-dir, never a self-emitted marker.
 - Has **no freshness/staleness gate** — content-match makes recency irrelevant.
 - **Links every other session that mentions the ticket** (via the resolver, content-match) under `related_sessions` — id, dir, mentions, ts — but does **not** sum them into the headline. Content-match over-includes incidental mentions (a single ticket can match dozens of sessions, not the handful that are real), so summing would over-count cost; the file declares `"scope": "primary-session"` and links siblings for audit.
 - Sums token totals + counts tool calls for the primary in one streaming pass, plus per-session monitoring: `compound_bash` (Bash calls stapling steps with ` && `) and `failed_calls` (`tool_result` items flagged `is_error`).
@@ -479,7 +479,7 @@ The helper:
 
 Exit codes: `0` written (proceed to §9); `1` primary unresolvable / git / fs failure — **FAILS LOUD** (STOP and surface inline — do NOT continue to §9 silently); `3` bad args.
 
-If discovery aborts (backfilling later, or no sidecar/hint), inspect with `--dry-run` (prints the payload, writes nothing) and recover with `--session <id>` (pins a specific transcript as primary). Find the right id by content: `grep -l "<TICKET>" ~/.claude/projects/*/*.jsonl` — though `--ticket <ID>` alone usually content-matches the primary.
+If discovery aborts (backfilling later, or no sidecar/hint), inspect with `--dry-run` (prints the payload, writes nothing) and recover with `--session <id>` (pins a specific transcript as primary). Find the right id by content: `grep -l "<TICKET>" <home>/.claude/projects/*/*.jsonl` — though `--ticket <ID>` alone usually content-matches the primary.
 
 Output JSON shape (so callers know what to expect):
 
@@ -512,7 +512,7 @@ Output JSON shape (so callers know what to expect):
 }
 ```
 
-The full session transcript stays at `~/.claude/projects/<encoded-cwd>/<session_id>.jsonl` for audit — `session_id` (primary) and each `related_sessions[].session_id` are the cross-references. **For retrieval + analysis recipes (per-ticket overview, cost ranking, tool-frequency rollups, transcript cross-reference, manual recovery if §8.5 ever fails) see `~/.claude/usage-stats.md`.**
+The full session transcript stays at `<home>/.claude/projects/<encoded-cwd>/<session_id>.jsonl` for audit — `session_id` (primary) and each `related_sessions[].session_id` are the cross-references. **For retrieval + analysis recipes (per-ticket overview, cost ranking, tool-frequency rollups, transcript cross-reference, manual recovery if §8.5 ever fails) see `~/.claude/usage-stats.md`.**
 
 ## 8.6 Review the session into the measurement sinks (symmetric with §8.5)
 

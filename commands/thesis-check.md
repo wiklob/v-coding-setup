@@ -38,7 +38,7 @@ At most one `get_issue` (the ticket — for its Goal + Acceptance, which the des
 Resolve the target design from `$ARGUMENTS`:
 - A **build-plan path** (`docs/plans/<id>-build.md`) → read it directly.
 - A **ticket id** (`ENG-83`) → the plan is `docs/plans/<ticket-id-lowercased>-build.md` (lowercase at the point of derivation — the same casing rule `/scope` writes and `/build` reads, so the file resolves on a case-sensitive FS).
-- **No arg** → derive the active ticket from `$WT_ABS/.claude/active-project.json` (standalone: `binding.linearIssue`; feature: the In Progress issue whose `gitBranchName` matches the current branch), then its lowercased build-plan path.
+- **No arg** → run `node ~/.claude/bin/ticket-worktree.mjs migrate-binding --worktree "$WT_ABS"` before normal binding read, then `node ~/.claude/bin/ticket-worktree.mjs read-binding --worktree "$WT_ABS"`; malformed/conflicting state hard-STOPs. Derive the active ticket from the returned binding (standalone: `binding.linearIssue`; feature: the In Progress issue whose `gitBranchName` matches the current branch), then its lowercased build-plan path. Never access the legacy checkout marker directly.
 
 Read the design from the plan's **`## Implementation design`** section. Its required fields are defined once, authoritatively, in the spec's field section — `docs/implementation-design-rung.md` **§1** (distinct from the bar in that spec's **§3**, which this command mirrors in its own §1 below). Read the fields from there; do not hard-code a divergent list (B2↔B4 must stay in lockstep on the one contract; a field rename there must not silently desync this check):
 

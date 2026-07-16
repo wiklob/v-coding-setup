@@ -45,7 +45,11 @@ correct autonomous operation, so it adds ~zero friction. Sanctioned ops MUST pas
 sourcing (. / source), symlinking (ln) and removing (rm) a worktree's ABSOLUTE .envrc
 symlink, `direnv allow`, test -f, implicit credential use (curl -H "Authorization: Bearer
 $TOKEN" | jq), and read-only Management-API GETs (the documented log/analytics path —
-V-11). A new secret-touch block requires the secret path to sit IN THE SAME SEGMENT as the
+V-11), including `curl -G --data-urlencode` analytics queries (the data goes in the query
+string, so it is a GET, not a mutation — V-385). Run such an authenticated GET as its own
+discrete call, not embedded in a `. ./.envrc && …` secret-loading mega-chain (convention 7):
+discrete calls stay inspectable and keep the credential off the transcript.
+A new secret-touch block requires the secret path to sit IN THE SAME SEGMENT as the
 reader/exfil verb — so `. ./.envrc; <cmd that happens to read a non-secret file>` (different
 segments) stays allowed.
 
@@ -116,6 +120,13 @@ CURL_WRITE_METHOD = re.compile(
     r"(?:-X\s*|--request[\s=]+)['\"]?(?:PATCH|POST|PUT|DELETE)\b", re.IGNORECASE)
 CURL_BODY = re.compile(
     r"(?:^|\s)(?:-d|--data|--data-raw|--data-binary|--data-urlencode)\b")
+# V-385: forced-GET signal. `-G`/`--get` moves -d/--data* into the URL query string and
+# issues a GET (curl manpage), and an explicit `-X GET` is likewise a read -- so a body flag
+# under either is NOT write intent. `-G` is case-sensitive (uppercase = --get; `-g` is
+# --globoff), so only the GET method verb is matched case-insensitively. An explicit write
+# `-X POST/...` is checked separately (CURL_WRITE_METHOD) and still wins, so `-G -X POST`
+# stays gated.
+CURL_GET = re.compile(r"(?:^|\s)(?:-G|--get)\b|(?:-X\s*|--request[\s=]+)['\"]?(?i:GET)\b")
 HTTP_CLIENTS = {"curl", "wget", "http", "https", "xh"}
 # V-36: any network-egress client that can carry a secret file off-box. Used with a
 # per-segment secret-path check so `curl --data-binary @.envrc host` (read + exfil in one
@@ -302,43 +313,110 @@ def expand_assignments(cmd):
                   lambda m: assign.get(m.group(1), m.group(0)), cmd)
 
 
+# --- V-385: inert note-logger arguments are data, not commands ---
+# A feedback/input logger takes a free-text `--note`/`--message` value that may QUOTE a command
+# (e.g. `node bin/log-feedback.mjs --note "curl -X POST .../database/query -d @q"`). That text
+# is inert -- an argument to node, never executed -- but the WHOLE-COMMAND scans (the curl-word
+# + Management-API heuristics) match it and misclassify the log call as a live API call. Redact
+# the literal note value from the string those whole-command scans see. Per-segment scans stay
+# on the original cmd (they are verb-keyed: the note segment's verb is `node`, not an HTTP
+# client, so they never fire on it). A value carrying command substitution ($(...) / backticks)
+# IS executed by the shell, so it is left in place to be scanned -- never redacted.
+NOTE_LOGGERS = {"log-feedback.mjs", "log-input-request.mjs"}
+NOTE_FLAGS = ("--note", "--message")
+
+
+def redact_inert_notes(cmd):
+    """Return cmd with any recognized note-logger's inert `--note`/`--message` value removed,
+    for use by the WHOLE-COMMAND scans only. Operates **per shell segment** (split on ; | && ||
+    & and newlines, separators preserved for a perfect round-trip) so a dangling `--note` can
+    never consume a *following* segment's command word: `shlex.split(cmd)` alone flattens a
+    newline (a real command boundary) into whitespace, which let
+    `log-feedback.mjs --note<newline>printenv` drop `printenv` from the scanned copy and slip the
+    whole-command-only DENYs (the V-385 security review). Each segment fails **safe**
+    independently -- an unbalanced-quote segment, or a note value carrying command substitution
+    ($(...) / backticks, which the shell executes), is left verbatim so it is still scanned. A
+    cmd with no note-logger round-trips unchanged."""
+    parts = re.split(r"(\|\||&&|\||;|&|\n)", cmd)   # capture separators -> "".join round-trips
+    for idx in range(0, len(parts), 2):             # even indices = segments, odd = separators
+        try:
+            toks = shlex.split(parts[idx])
+        except ValueError:
+            continue                                # unbalanced quote -> leave segment verbatim
+        if not any(t.split("/")[-1] in NOTE_LOGGERS for t in toks):
+            continue                                # no note-logger in THIS segment
+        out, drop_next, keep_verbatim = [], False, False
+        for t in toks:
+            val = None
+            if drop_next:
+                val, drop_next = t, False           # the value token, still in this segment
+            elif t in NOTE_FLAGS:
+                drop_next = True
+                continue
+            else:
+                for f in NOTE_FLAGS:
+                    if t.startswith(f + "="):        # --note=<value> form
+                        val = t[len(f) + 1:]
+                        break
+            if val is not None:
+                # A value the shell EXECUTES while forming the argument must never be dropped:
+                # command substitution `$(...)` / backticks AND process substitution `<(...)` /
+                # `>(...)` all run a command (the V-385 review's proc-subst bypass:
+                # `--note <(printenv>/tmp/leak)` is one shlex token, dropped-yet-executed). Quoted
+                # forms don't actually execute, but shlex has stripped the quotes, so screen on
+                # the marker and keep the segment verbatim -- over-scan is the safe direction.
+                if any(m in val for m in ("$(", "`", "<(", ">(")):
+                    keep_verbatim = True            # executes -> scan seg as-is, never drop
+                    break
+                continue                            # inert literal -> drop from scanned copy
+            out.append(t)
+        if not keep_verbatim:
+            parts[idx] = " ".join(shlex.quote(x) for x in out)
+    return "".join(parts)
+
+
 def scan_bash(cmd, depth=0):
     """Return (decision, reason): decision in {'block','ask',None}. Collects every signal
     across the whole command + all segments (+ recursively through shell-opener payloads),
     then resolves DENY-before-ASK. depth-bounded so a pathological nest can't loop."""
     blocks, asks = [], []
     segs = [s.strip() for s in segments(cmd) if s.strip()]
+    # V-385: the whole-command scans below run against a copy with any inert note-logger
+    # `--note`/`--message` value redacted, so a command *quoted inside* a feedback note is not
+    # re-parsed as a live API call. Per-segment scans (from `segs`) stay on the original cmd --
+    # they are verb-keyed, so a real curl/DB-query segment still blocks even alongside a note.
+    scanned = redact_inert_notes(cmd)
 
     # ===== whole-command DENY =====
-    if re.search(r"\bprintenv\b", cmd):
+    if re.search(r"\bprintenv\b", scanned):
         blocks.append("`printenv` surfaces credential env values.")
-    if re.search(r"\b(env|set)\s*\|\s*(grep|egrep|fgrep|rg|cat|awk|sed|tee|head|tail)\b", cmd) \
-            or ENV_GREP_DUMP.search(cmd):
+    if re.search(r"\b(env|set)\s*\|\s*(grep|egrep|fgrep|rg|cat|awk|sed|tee|head|tail)\b", scanned) \
+            or ENV_GREP_DUMP.search(scanned):
         blocks.append("dumping the environment into a reader (env|grep / (env)|grep / set|grep).")
-    if DECLARE_DUMP.search(cmd):
+    if DECLARE_DUMP.search(scanned):
         blocks.append("`declare -p`/`typeset -p` prints every variable WITH its value "
                       "(dumps credentials).")
     # Permission-bypass flag anywhere — also test a de-quoted copy so intra-token quoting
     # (`--dangerously-skip-perm''issions`) that bash reassembles cannot split the literal.
-    if BYPASS_FLAG.search(cmd) or BYPASS_FLAG.search(cmd.replace("'", "").replace('"', "")):
+    if BYPASS_FLAG.search(scanned) or BYPASS_FLAG.search(scanned.replace("'", "").replace('"', "")):
         blocks.append("a permission-bypass flag (--dangerously-skip-permissions / "
                       "--permission-mode bypassPermissions) -- never apply this silently. "
                       "Run without it, or get explicit human sign-off first.")
-    for m in re.finditer(r"(?:\d*>>?|&>>?|>\|)\s*['\"]?([^\s'\";|&<>()]+)", cmd):
+    for m in re.finditer(r"(?:\d*>>?|&>>?|>\|)\s*['\"]?([^\s'\";|&<>()]+)", scanned):
         if secret_in(m.group(1)):
             blocks.append("output redirect to a secret file (" + m.group(1) + ") -- writing a "
                           "secret via shell redirect overwrites/corrupts it.")
     # Credential-value surfaces beyond echo/printf/print (V-36).
-    for m in HERESTRING_VAR.finditer(cmd):
+    for m in HERESTRING_VAR.finditer(scanned):
         if is_cred_var(m.group(1)):
             blocks.append("herestring surfacing a credential variable ($" + m.group(1) + ").")
-    for m in ENV_ACCESS_VAR.finditer(cmd):
+    for m in ENV_ACCESS_VAR.finditer(scanned):
         if is_cred_var(m.group(1)):
             blocks.append("interpreter env access surfacing a credential ($" + m.group(1) + ").")
     # Management-API raw SQL, with var-indirection expanded (V-36).
-    expanded = expand_assignments(cmd)
-    if (MGMT_DB_QUERY.search(cmd) or MGMT_DB_QUERY.search(expanded)) \
-            and re.search(r"\b(?:curl|wget|http|https|xh)\b", cmd):
+    expanded = expand_assignments(scanned)
+    if (MGMT_DB_QUERY.search(scanned) or MGMT_DB_QUERY.search(expanded)) \
+            and re.search(r"\b(?:curl|wget|http|https|xh)\b", scanned):
         blocks.append("raw SQL to the Supabase Management API database/query endpoint "
                       "(arbitrary prod DDL/DML — go through supabase/migrations or not at all).")
 
@@ -447,8 +525,14 @@ def scan_bash(cmd, depth=0):
                         "Confirm before it runs — this gate fires regardless of command position "
                         "(leading cd/pipe/chain/var-prefix), closing the prefix-rule evasion.")
 
+        # V-385: a body flag (`--data*`) is write-intent ONLY when it is NOT a forced GET --
+        # `-G`/`--get`/`-X GET` moves the data into the URL query string, so `curl -G
+        # --data-urlencode 'sql=…' <analytics-url>` is a read and passes. An explicit write
+        # `-X POST/...` still gates regardless of `-G`. The `/database/query` endpoint is
+        # unaffected -- it hard-DENYs above (deny-before-ask), independent of method/body.
         if verb in HTTP_CLIENTS and MGMT_PROJECT.search(s) \
-                and (CURL_WRITE_METHOD.search(s) or CURL_BODY.search(s)):
+                and (CURL_WRITE_METHOD.search(s)
+                     or (CURL_BODY.search(s) and not CURL_GET.search(s))):
             asks.append("write to the Supabase Management API (prod config mutation). "
                         "Confirm before it runs. (Read-only GET log/analytics endpoints are allowed.)")
 

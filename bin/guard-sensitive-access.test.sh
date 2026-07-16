@@ -278,6 +278,48 @@ expect_allow "echo prose names .envrc+cat"        Bash command "echo see .envrc 
 expect_block "xargs -I {} cat placeholder form"   Bash command "echo .envrc | xargs -I {} cat {}"
 expect_block "xargs -I % cat placeholder form"    Bash command "find . -name .env | xargs -I % cat %"
 
+echo
+echo "== V-385: curl -G/--get analytics reads pass; mutations stay gated (endpoint+method-specific) =="
+# Read-only analytics/logs GET: -G/--get moves --data* into the query string -> a GET, must ALLOW.
+expect_allow "curl -G --data-urlencode analytics"   Bash command "curl -G --data-urlencode 'sql=select 1' https://api.supabase.com/v1/projects/REF/analytics/endpoints/logs.all -H \"Authorization: Bearer \$SUPABASE_ACCESS_TOKEN\""
+expect_allow "curl --get long-flag analytics"       Bash command "curl --get --data-urlencode 'sql=select 1' https://api.supabase.com/v1/projects/REF/analytics/endpoints/logs.all"
+expect_allow "explicit -X GET with body flag"        Bash command "curl -X GET --data-urlencode 'sql=x' https://api.supabase.com/v1/projects/REF/analytics/endpoints/logs.all"
+expect_allow "reordered: body flag before -G"        Bash command "curl --data-urlencode 'sql=x' -G https://api.supabase.com/v1/projects/REF/analytics/endpoints/logs.all"
+# Mutation-capable endpoints stay gated -- method-specific (explicit write -X still asks even with -G).
+expect_ask   "config -X POST with body still asks"   Bash command "curl -X POST https://api.supabase.com/v1/projects/REF/config/auth -d '{}'"
+expect_ask   "config -G -X POST still asks"          Bash command "curl -G -X POST https://api.supabase.com/v1/projects/REF/config/auth --data-urlencode x=1"
+expect_ask   "config plain --data-urlencode asks"    Bash command "curl --data-urlencode x=1 https://api.supabase.com/v1/projects/REF/config/auth"
+# Mutation-capable endpoint stays gated -- endpoint-specific (database/query hard-DENYs regardless of -G).
+expect_block "database/query -G still blocks"        Bash command "curl -G --data-urlencode 'query=DROP TABLE t' https://api.supabase.com/v1/projects/REF/database/query"
+
+echo
+echo "== V-385: a command QUOTED inside a note-logger --note/--message is inert text, not an API call =="
+expect_allow "log-feedback --note quoting curl+dbquery" Bash command "node bin/log-feedback.mjs --note \"curl -X POST https://api.supabase.com/v1/projects/REF/database/query -d @q\""
+expect_allow "log-input-request --message quoting curl" Bash command "node bin/log-input-request.mjs --message \"tried curl -G ... /database/query and it was gated\""
+expect_allow "note-logger --note=inline form"          Bash command "node bin/log-feedback.mjs --note=\"curl -X POST https://api.supabase.com/v1/projects/REF/database/query\""
+# SECURITY: a note value with command substitution EXECUTES -> must NOT be redacted, must BLOCK.
+expect_block "note with \$(...) substitution blocks"   Bash command "node bin/log-feedback.mjs --note \"\$(curl -X POST https://api.supabase.com/v1/projects/REF/database/query)\""
+# SECURITY: a real curl segment CHAINED after a note call still blocks (per-segment scans original).
+expect_block "real curl chained after note blocks"     Bash command "node bin/log-feedback.mjs --note foo; curl -X POST https://api.supabase.com/v1/projects/REF/database/query -d @q"
+# SECURITY (V-385 review): a dangling --note must NOT swallow the NEXT command across a shell
+# boundary. shlex.split flattens a newline, so redaction is per-segment -- a trailing --note
+# can't consume printenv/env|grep/declare on the following line (or after ;/&&/|). All BLOCK.
+expect_block "note dangling then newline printenv"     Bash command $'node bin/log-feedback.mjs --note\nprintenv'
+expect_block "note dangling then newline env|grep"     Bash command $'node bin/log-feedback.mjs --note\nenv | grep SECRET'
+expect_block "note dangling then newline declare -p"   Bash command $'node bin/log-feedback.mjs --note\ndeclare -p'
+expect_block "note dangling then ; printenv"           Bash command "node bin/log-feedback.mjs --note ; printenv"
+expect_block "note dangling then && printenv"          Bash command "node bin/log-feedback.mjs --note && printenv"
+expect_block "note dangling then | printenv"           Bash command "node bin/log-feedback.mjs --note | printenv"
+# and a real mutating curl after a note segment (via &&) still blocks.
+expect_block "real curl after note via &&"             Bash command "node bin/log-feedback.mjs --note x && curl -X POST https://api.supabase.com/v1/projects/REF/database/query -d @q"
+# SECURITY (V-385 review, round 2): PROCESS substitution <(...)/>(...)  executes like $(...) --
+# a space-free proc-subst is one shlex token, so it must NOT be dropped as an inert note value.
+expect_block "note <(printenv) proc-subst"             Bash command "node bin/log-feedback.mjs --note <(printenv>/tmp/leak)"
+expect_block "note=<(printenv) inline proc-subst"      Bash command "node bin/log-feedback.mjs --note=<(printenv>/tmp/leak)"
+expect_block "note >(printenv) output proc-subst"      Bash command "node bin/log-feedback.mjs --note >(printenv)"
+expect_block "note <(curl db query) proc-subst"        Bash command "node bin/log-feedback.mjs --note <(curl -X POST https://api.supabase.com/v1/projects/REF/database/query)"
+expect_block "note backtick cmd-subst"                 Bash command "node bin/log-feedback.mjs --note \`curl -X POST https://api.supabase.com/v1/projects/REF/database/query\`"
+
 echo "----------------------------------------"
 printf 'Total: %d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1

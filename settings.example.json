@@ -179,7 +179,7 @@
     "PreToolUse": [
       {
         "matcher": "Bash|Read|Edit|Write|MultiEdit",
-        "hooks": [{ "type": "command", "command": "python3 ~/.claude/bin/guard-secret-access.py" }]
+        "hooks": [{ "type": "command", "command": "python3 ~/.claude/bin/guard-sensitive-access.py" }]
       },
       {
         "matcher": "Read|Edit|Write|MultiEdit",

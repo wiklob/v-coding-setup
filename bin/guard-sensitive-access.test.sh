@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# ~/.claude/bin/guard-secret-access.test.sh
-# Provable, runnable test for guard-secret-access.py (V-22).
+# ~/.claude/bin/guard-sensitive-access.test.sh
+# Provable, runnable test for guard-sensitive-access.py (V-22).
 #
 # The CB-144 leak vector was a `Read` TOOL CALL on .envrc — not a shell pipe.
 # The post-mortem confirmed only the shell vectors (grep/echo). This test locks
@@ -10,7 +10,7 @@
 # operations (source / symlink / test -f / curl-with-implicit-var / .env.example)
 # stay allowed (the guard is allow-broad, block-narrow, fail-open).
 #
-# This tests the GUARD layer (bin/guard-secret-access.py). The second, independent
+# This tests the GUARD layer (bin/guard-sensitive-access.py). The second, independent
 # layer is the settings.json `Read(.envrc)` / `Read(.env*)` denylist — verified by
 # inspection (settings.json `permissions.deny`) and by the live denial of any real
 # Read tool call; a shell script cannot exercise the Read-tool permission layer.
@@ -18,12 +18,12 @@
 # No real secrets are used: every path is synthetic and every credential var is a
 # bare NAME with no value (the guard blocks on the name pattern, not a value).
 #
-# Usage:  bash ~/.claude/bin/guard-secret-access.test.sh
+# Usage:  bash ~/.claude/bin/guard-sensitive-access.test.sh
 # Exit 0 = all assertions pass; exit 1 = at least one failed.
 
 set -u
 
-GUARD="$(cd "$(dirname "$0")" && pwd)/guard-secret-access.py"
+GUARD="$(cd "$(dirname "$0")" && pwd)/guard-sensitive-access.py"
 
 if [ ! -f "$GUARD" ]; then
   echo "FATAL: guard not found at $GUARD" >&2

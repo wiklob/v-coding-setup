@@ -4,7 +4,7 @@
 // (pipeline/audit/tool-fit.jsonl, pipeline/audit/produced-review.jsonl). (V-335)
 //
 // WHY THIS EXISTS — the sensitive-file prompt.
-//   A guard hook (guard-secret-access.py, PreToolUse:Bash) string-scans every Bash
+//   A guard hook (guard-sensitive-access.py, PreToolUse:Bash) string-scans every Bash
 //   command; a command whose text contains the guarded substring `pipeline/audit`
 //   (a bare `mkdir -p pipeline/audit`, or an inline `node -e`/`python3 -c` append
 //   that names the sink path) trips the sensitive-file permission prompt EVERY run,

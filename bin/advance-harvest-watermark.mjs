@@ -11,7 +11,7 @@
 //   built-in dotfile heuristic is not suppressed by that allow-glob. In the daily
 //   unattended `claude -p "/harvest-pipeline-bugs --yes"` cron (V-110) there is no
 //   one to approve the prompt → the watermark never advances / the run hangs.
-//   (Probed at scope time: the custom guard-secret-access.py hook does NOT block
+//   (Probed at scope time: the custom guard-sensitive-access.py hook does NOT block
 //   this write — both Write-tool and `>`-redirect payloads return exit 0. The
 //   culprit is the harness built-in, not the hook and not settings.json.)
 //

@@ -24,7 +24,7 @@ Correctness — rewrite ONLY when it provably helps and cannot corrupt a real pa
 Scope: never touches Bash — shell escaping there is CORRECT — the matcher excludes it.
 
 Safety: FAILS OPEN. Any parse/logic error -> exit 0 (allow, no output). This is a
-convenience normalizer layered under the real permission controls — guard-secret-access.py
+convenience normalizer layered under the real permission controls — guard-sensitive-access.py
 runs as a separate PreToolUse hook that receives the ORIGINAL input independently (hooks
 do not chain, so this rewrite never reaches it) and its deny wins, so an escaped secret
 path is blocked regardless of this hook — never a gate; a bug here must not be able to

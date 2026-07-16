@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Decision-matrix tests for the PreToolUse guard (bin/guard-secret-access.py).
+"""Decision-matrix tests for the PreToolUse guard (bin/guard-sensitive-access.py).
 
 Run: python3 bin/guard-access.test.py   (exit 0 = all pass, 1 = failure)
 
@@ -15,7 +15,7 @@ never fires on the test invocation itself.
 """
 import json, subprocess, sys, os
 
-GUARD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "guard-secret-access.py")
+GUARD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "guard-sensitive-access.py")
 REF = "abcdefghijklmnopqrst"  # a stand-in project ref
 MGMT = "https://api.supabase.com/v1/projects/" + REF
 

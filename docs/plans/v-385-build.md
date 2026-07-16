@@ -65,7 +65,11 @@ Two narrowing exceptions layered onto the existing allow-broad / block-narrow sc
 - Build check: n/a (no TS/Next build surface; Python guard + bash tests).
 
 ## Deviations
-(none yet)
+### 2026-07-16 — dropped dead `-m` from NOTE_FLAGS
+Designed: `NOTE_FLAGS = ("--note", "--message", "-m")`.
+Did instead: `NOTE_FLAGS = ("--note", "--message")` — dropped `-m`.
+Why: thesis-check build-surfaceable note — neither note-logger accepts `-m` (log-feedback uses `--note`, log-input-request uses `--message`), so the `-m` branch was dead. In-scope-cheap, folded in per craft/building.md.
+
 
 ## Thesis-check — 2026-07-16
 Verdict: sound

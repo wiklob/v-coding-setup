@@ -45,6 +45,14 @@ in-flight work finishes, the tree stops widening). Yesterday's peak was 132 spaw
 threshold triggers inside one tick. Entries are never auto-removed; a human unblocks by editing
 the file. Install: `bin/install-spawn-observer-launchd.sh`.
 
+**Job parking** (same tick): the bg-job daemon re-runs blocked jobs on its own cadence — on
+2026-07-15 that re-shipped full context into a dead account every ~3 minutes for an hour. A job
+`blocked` on a provider-limit signature (cooling down / rate limit / spend/usage limit / quota)
+`SPAWN_OBSERVER_PARK_STRIKES` (3) times within `SPAWN_OBSERVER_PARK_WINDOW_MIN` (60) is parked:
+`state.json` backed up to `.parked.bak`, state set `done`, reason preserved in `detail`. A human
+resumes it deliberately, on a model with quota. The router's circuit breaker
+(claude-model-router `guard.breakerThreshold`) is the same idea one layer down.
+
 ## Wiring
 
 `settings.example.json` registers the hook under `PreToolUse` with matcher `Agent|Task`.

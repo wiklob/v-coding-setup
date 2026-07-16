@@ -8,11 +8,14 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 export SPAWN_OBSERVER_ROOT="$TMP/projects"
+export SPAWN_OBSERVER_JOBS="$TMP/jobs"
 export SPAWN_OBSERVER_BLOCKLIST="$TMP/blocklist"
 export SPAWN_OBSERVER_STATE="$TMP/state.json"
 export SPAWN_OBSERVER_MAX_AGENTS=10
 export SPAWN_OBSERVER_MAX_GROWTH=5
 export SPAWN_OBSERVER_ACTIVE_MINUTES=30
+export SPAWN_OBSERVER_PARK_STRIKES=3
+export SPAWN_OBSERVER_PARK_WINDOW_MIN=60
 PATH_NO_OSASCRIPT="$TMP/nobin"; mkdir -p "$PATH_NO_OSASCRIPT"   # keep notifications quiet
 
 pass=0; fail=0
@@ -50,6 +53,43 @@ grep -q '^sess-stale$' "$SPAWN_OBSERVER_BLOCKLIST" 2>/dev/null && bad "stale ses
 python3 "$OBS" >/dev/null
 n=$(grep -c '^sess-big$' "$SPAWN_OBSERVER_BLOCKLIST")
 [ "$n" -eq 1 ] && ok "no duplicate entries" || bad "duplicates: $n"
+
+# --- job parking --------------------------------------------------------------
+NOW_ISO="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+mkjob() { # mkjob <id> <state> <detail> <strikes>
+  d="$SPAWN_OBSERVER_JOBS/$1"; mkdir -p "$d"
+  printf '{"state":"%s","tempo":"%s","detail":"%s","respawnFlags":[]}' "$2" "$2" "$3" > "$d/state.json"
+  : > "$d/timeline.jsonl"
+  i=0; while [ $i -lt "$4" ]; do
+    printf '{"at":"%s","state":"blocked","detail":"%s"}\n' "$NOW_ISO" "$3" >> "$d/timeline.jsonl"
+    i=$((i+1))
+  done
+}
+
+# 6. blocked on a provider limit with 3 recent strikes -> parked (state done, backup kept)
+mkjob j-limited blocked "API Error: All credentials for model gpt-x are cooling down" 3
+python3 "$OBS" >/dev/null
+s="$(python3 -c "import json;print(json.load(open('$SPAWN_OBSERVER_JOBS/j-limited/state.json'))['state'])")"
+[ "$s" = done ] && [ -f "$SPAWN_OBSERVER_JOBS/j-limited/state.json.parked.bak" ] \
+  && ok "provider-limited job parked with backup" || bad "park limited job (state=$s)"
+
+# 7. blocked on an ordinary error -> untouched
+mkjob j-normal blocked "TypeError: cannot read properties of undefined" 5
+python3 "$OBS" >/dev/null
+s="$(python3 -c "import json;print(json.load(open('$SPAWN_OBSERVER_JOBS/j-normal/state.json'))['state'])")"
+[ "$s" = blocked ] && ok "non-limit block untouched" || bad "non-limit block parked (state=$s)"
+
+# 8. limit error but below the strike threshold -> untouched
+mkjob j-early blocked "rate_limit_error: weekly usage limit reached" 2
+python3 "$OBS" >/dev/null
+s="$(python3 -c "import json;print(json.load(open('$SPAWN_OBSERVER_JOBS/j-early/state.json'))['state'])")"
+[ "$s" = blocked ] && ok "below strike threshold untouched" || bad "early park (state=$s)"
+
+# 9. working jobs never parked
+mkjob j-working working "all good" 0
+python3 "$OBS" >/dev/null
+s="$(python3 -c "import json;print(json.load(open('$SPAWN_OBSERVER_JOBS/j-working/state.json'))['state'])")"
+[ "$s" = working ] && ok "working job untouched" || bad "working job parked (state=$s)"
 
 echo "spawn-observer: $pass passed, $fail failed"
 [ $fail -eq 0 ] || exit 1

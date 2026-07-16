@@ -1,0 +1,76 @@
+{
+  "$schema": "./custom-models.schema.json",
+  "schemaVersion": 1,
+  "models": [
+    {
+      "id": "gpt-5.6-sol",
+      "displayName": "GPT-5.6 Sol",
+      "provider": "openai",
+      "capabilities": {
+        "inputContextTokens": {
+          "tokens": 1050000,
+          "provenance": {
+            "kind": "provider-documentation",
+            "authority": "OpenAI",
+            "url": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+            "retrievedAt": "2026-07-16"
+          }
+        },
+        "maxOutputTokens": {
+          "tokens": 128000,
+          "provenance": {
+            "kind": "provider-documentation",
+            "authority": "OpenAI",
+            "url": "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+            "retrievedAt": "2026-07-16"
+          }
+        }
+      },
+      "claudeCode": {
+        "extendedContextSuffix": "[1m]",
+        "budgetedInputTokens": 1000000,
+        "preferredContextMode": "extended",
+        "compaction": {
+          "status": "documented",
+          "expectedUsableInputTokens": 967000,
+          "autoCompactWindowEnv": "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+          "provenance": {
+            "kind": "harness-documentation",
+            "authority": "Anthropic (Claude Code model-config docs)",
+            "url": "https://code.claude.com/docs/en/model-config#extended-context",
+            "retrievedAt": "2026-07-16"
+          }
+        }
+      },
+      "routes": [
+        {
+          "id": "codex-oauth-cliproxy",
+          "gateway": "CLIProxyAPI",
+          "authentication": {
+            "kind": "codex-oauth-subscription",
+            "provenance": {
+              "kind": "operator-observation",
+              "authority": "v-383 operator",
+              "evidence": "models/evidence/gpt-5.6-sol.codex-oauth.json",
+              "retrievedAt": "2026-07-16"
+            }
+          },
+          "upstreamModelId": "gpt-5.6-sol",
+          "contextVerification": {
+            "status": "verified",
+            "verifiedInputTokensAtLeast": 336494,
+            "observedWireModelId": "gpt-5.6-sol",
+            "verifiedAt": "2026-07-16",
+            "probe": "bin/probe-custom-model-context.mjs",
+            "evidence": "models/evidence/gpt-5.6-sol.codex-oauth.json"
+          }
+        }
+      ],
+      "fallback": {
+        "contextMode": "plain",
+        "modelId": "gpt-5.6-sol",
+        "scope": "session"
+      }
+    }
+  ]
+}

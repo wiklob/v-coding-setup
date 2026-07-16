@@ -49,7 +49,7 @@ The installer is **non-destructive**: engine files are per-file symlinks (a `git
 
 ## Security model
 
-The permission stance is *allow-broad, block-narrow*, enforced in layers: settings **deny rules** for secret files and destructive git; a **PreToolUse guard** (`bin/guard-secret-access.py`) that catches what prefix rules structurally can't (interpreter exfil, pipe-split reads, env dumps, permission-bypass flags, prod-mutating commands buried mid-chain); **ask gates** on prod-facing verbs; and an autoMode policy whose hard-deny rules forbid credentials ever appearing in a transcript. Secrets live in `~/.claude/.envrc` (direnv), are *used* implicitly and never displayed. Session transcripts are readable only through a redacting resolver. CI runs the test suite, a scrub gate, and gitleaks.
+The permission stance is *allow-broad, block-narrow*, enforced in layers: settings **deny rules** for secret files and destructive git; a **PreToolUse guard** (`bin/guard-sensitive-access.py`) that catches what prefix rules structurally can't (interpreter exfil, pipe-split reads, env dumps, permission-bypass flags, prod-mutating commands buried mid-chain); **ask gates** on prod-facing verbs; and an autoMode policy whose hard-deny rules forbid credentials ever appearing in a transcript. Secrets live in `~/.claude/.envrc` (direnv), are *used* implicitly and never displayed. Session transcripts are readable only through a redacting resolver. CI runs the test suite, a scrub gate, and gitleaks.
 
 ## Scheduled rituals (all optional)
 

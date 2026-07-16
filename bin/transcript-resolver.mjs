@@ -82,7 +82,7 @@ function die(code, msg) {
 
 // ---------------------------------------------------------------------------
 // Redaction — keep env-var NAMES + structure, mask VALUES. Self-contained: the
-// guard (guard-secret-access.py) is a PreToolUse access-decision hook, not a
+// guard (guard-sensitive-access.py) is a PreToolUse access-decision hook, not a
 // reusable redaction lib, so we replicate the secret CLASSES the deny-list knows
 // (.env*/TOKEN/SECRET/KEY/CREDENTIAL/Bearer/pem/key) rather than importing it.
 // Over-masking is acceptable; leaking is not.

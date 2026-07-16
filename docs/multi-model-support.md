@@ -11,7 +11,7 @@ model; through a **Claude-API-compatible proxy** (e.g.
 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)) that serves the
 Anthropic Messages surface and routes foreign model ids to their providers, it runs
 non-Anthropic models too. The pipeline inherits that for free — the safety layer
-included, since deny rules, ask gates, and `guard-secret-access.py` are enforced by
+included, since deny rules, ask gates, and `guard-sensitive-access.py` are enforced by
 the harness on tool calls regardless of the model behind them.
 
 ## The mechanism: claude-model-router

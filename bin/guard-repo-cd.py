@@ -32,7 +32,7 @@ Correctness — rewrite ONLY when it provably helps and cannot corrupt a real pa
     verbatim.
 
 Safety: FAILS OPEN. Any parse/logic error -> exit 0 (allow, no output). Layered
-under guard-secret-access.py, which receives the ORIGINAL input independently
+under guard-sensitive-access.py, which receives the ORIGINAL input independently
 (hooks don't chain) and whose deny/ask wins — so this rewrite can never weaken a
 secret/prod-mutation block.
 """

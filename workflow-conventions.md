@@ -319,6 +319,19 @@ An `mcp__*` tool (Linear, Sentry, Gmail, …) is invoked through the **tool-use 
 
 ---
 
+## 14. Subagent output discipline — bound what re-enters the main frame
+
+A subagent's **final message is the payload the orchestrator ingests** — and the harness re-echoes that payload in the completion task-notification — so on a routed / non-1M-context model a fan-out of verbose agents overflows the window (`400 input exceeds the context window`) even when every agent's work was correct. The failure this convention removes: an orchestrator that reads **full** subagent transcripts back (or a raw `local_agent` `.output` file — a symlink to the entire JSONL sidechain, echoed plans and all, not the answer) accumulates 90–150k-token payloads per agent in its own frame and dies mid-run. V-388's vivid instance: a `/code-review` 8-finder fan-out inside a `/go` chain reliably killed routed-model runs — a `400` after *each* finder finished, because each finished agent's whole transcript re-entered the main context. The rule is symmetric — bound both what the subagent **returns** and what the orchestrator **reads back**:
+
+- **The dispatched subagent returns its compact result only.** When you spawn an `Agent`, instruct it in its prompt to return **only** its terse structured finding — no raw file contents, no diff, no exploration narration ("I read X then Y"), no echoed plan. Its final message *is* what lands in the main frame (and what the task-notification re-echoes), so it must be small: a finder returns findings (the `ReportFindings` shape), a research agent its two-paragraph `file:line`-cited brief, a digest agent the conclusion — never the file dump. (This is the dispatch-time enforcement of `opus-4-8.md`'s `read-discipline` "the finding comes back, not the file dump".)
+- **The orchestrator ingests summaries, never raw transcripts.** Do not read a subagent's raw `.output` file back into context — use the agent's returned message. Any genuine transcript access goes through the redacting/streaming readers (`transcript-resolver.mjs` / `session-review.mjs`), never a bulk load; `tool-fit.md §1` is the reference pattern ("never bulk-load or dump a transcript").
+- **Cap fan-out concurrency; consume compact results, don't block-read all N transcripts.** A large finder fan-out (N ≳ 6) whose agents each return a verbose payload overflows the frame the moment the orchestrator reads them back together. Bound the batch — cap concurrent agents and consume each compact finding as it lands — rather than blocking on all N full transcripts at once. On a routed / non-1M model this is the difference between a completed review and a dead run.
+- **Route review through the bounded pipeline contract.** The pipeline's own review is the `review-pr.md §2` structured-sections contract (`land-ticket.md §4.5`) — compact by construction. When a chain would otherwise trigger a high-fan-out built-in review (`/code-review` at high/ultra effort) on a routed model, prefer that bounded tier — or a lower effort — inside the chain; a fan-out sized for a 1M frame does not fit a routed one.
+
+`/go`, `/land-ticket §4.5`, and any pipeline command that dispatches `Agent` inherit this; it is the general rule behind the per-site "return only the finding" phrasing those commands already carry.
+
+---
+
 **Precedence:** these conventions are additive to a skill's own steps and to repo `CLAUDE.md`/rules. If a repo rule conflicts, the repo rule wins for that repo — note the conflict in the Deviations log.
 
 **Chain reference:** see `~/.claude/workflow-chains.md` for the full command map — typical flows (feature, standalone, audit), who-calls-who, and where state lives. Each individual skill at `~/.claude/commands/<skill>.md` carries its own operational detail.

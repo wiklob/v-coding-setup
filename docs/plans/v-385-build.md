@@ -66,3 +66,17 @@ Two narrowing exceptions layered onto the existing allow-broad / block-narrow sc
 
 ## Deviations
 (none yet)
+
+## Thesis-check — 2026-07-16
+Verdict: sound
+Bar: 1:pass 2:pass 3:pass 4:pass 5:pass 6:pass 7:pass
+Product: n/a — not design-touching
+Materiality: build-surfaceable
+Reasoning:
+- Thesis explicit + attackable; all named seams (L340 whole-command DB_QUERY DENY, L429 per-segment DB_QUERY DENY, L450-451 MGMT_PROJECT ASK) verified to exist as described.
+- Outcomes refutable + correct: `-G --data-urlencode <project-url>`→allow; `-X POST -d`→ask; `-G -X POST`→ask (CURL_WRITE_METHOD still matches).
+- Every Acceptance item has a mechanism; database/query stays hard-DENY regardless of -G (endpoint- + method-specific).
+- Defense-in-depth preserved: redaction rewrites only the whole-command scan copy; per-segment + expand_assignments run on original cmd, so a real curl→database/query or var-indirection still blocks inside a note-logger chain. The `$(`/backtick guard is the exfil-hiding backstop.
+- build-surfaceable note: `-m` in NOTE_FLAGS is dead (log-feedback→--note, log-input-request→--message); drop it. Fold in during §4.
+- build-surfaceable note: ASK-gate narrowing applies to all /projects/ endpoints, not just analytics — safe (GET-is-read holds; database/query separately hard-blocked).
+Trigger: none   ·   Suggestion: proceed-with-ack — sound; drop dead `-m`, ensure the `--note "$(curl …database/query)"`-stays-BLOCKED test is present.

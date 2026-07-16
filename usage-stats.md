@@ -26,6 +26,7 @@ Separately, every **other** session that mentions the ticket (via the resolver, 
 
 ```json
 {
+  "schema_version": 2,
   "repo": "myapp",
   "ticket": "CB-107",
   "pr": 52,                                  // number, or "none" for code-free landings
@@ -41,6 +42,28 @@ Separately, every **other** session that mentions the ticket (via the resolver, 
     "cache_read": 9359349,                   // cumulative context re-read from cache each turn
     "cache_create": 337050,                  // new tokens written into cache
     "assistant_msg_count": 132
+  },
+  "assistant_usage": [                       // every usage-bearing assistant message
+    { "ordinal": 1, "timestamp": "2026-05-24T10:32:11Z", "command": "go",
+      "model_id": "gpt-5.6-sol",            // exact message.model; null when absent
+      "usage": { "input": 10, "output": 20, "cache_read": 30, "cache_create": 4 } }
+  ],
+  "usage_by_model": {                        // mixed-model aggregate of those records
+    "gpt-5.6-sol": { "model_id": "gpt-5.6-sol", "totals": {
+      "input": 10, "output": 20, "cache_read": 30, "cache_create": 4,
+      "assistant_msg_count": 1
+    } }
+  },
+  "billing_context": { "default_mode": "unknown", "model_overrides": {}, "source": "default" },
+  "accounting": {
+    "currency": "USD",
+    "models": [{
+      "observed_model": "gpt-5.6-sol", "provider": "openai", "canonical_model": "gpt-5.6-sol",
+      "classification": "API-equivalent estimate", "estimate_usd": 0.001,
+      "pricing": { "source_url": "https://openai.com/index/gpt-5-6/", "retrieved_at": "2026-07-15",
+        "effective_at": "2026-07-09", "currency": "USD",
+        "rates_per_million": { "input": 5, "output": 30, "cache_create": 6.25, "cache_read": 0.5 } }
+    }]
   },
   "tool_calls": {                            // count per tool/MCP name (primary session)
     "Bash": 23,
@@ -58,7 +81,19 @@ Separately, every **other** session that mentions the ticket (via the resolver, 
 }
 ```
 
-`totals`/`tool_calls`/`session_id` stay top-level and cover the **primary session only**, so the recipes below keep working unchanged. To audit the whole lifecycle, walk `related_sessions` (each `session_id` cross-references a transcript exactly like the primary).
+`totals`/`tool_calls`/`session_id` stay top-level and cover the **primary session only**, so older JSON and token-only readers remain valid. Older files without `assistant_usage` are normalized as per-session deltas and remain model-unknown/unpriced. To audit the whole lifecycle, walk `related_sessions` (each `session_id` cross-references a transcript exactly like the primary); they are still linked, never summed.
+
+### Billing classification
+
+Pricing lives in `bin/usage-accounting.mjs` and resolves exact model IDs only. Every table includes provider, canonical model, official source URL, retrieval/effective date, currency, and all four token-category rates. A missing/unknown model or a table older than the 180-day freshness window is `unknown/unpriced`; it never inherits another model's price.
+
+Billing context is explicit:
+
+- `V_USAGE_BILLING_MODE=subscription|actual-api|unknown` — default for the session.
+- `--billing-mode <mode>` — CLI override.
+- Repeatable `--billing-model <exact-model-id>=<mode>` — per-model override for a mixed session.
+
+Without configuration, a freshly priced model is an **API-equivalent estimate**, not an asserted bill. `actual-api` produces an **actual API estimate**; `subscription` reports **subscription usage — no token bill** and may retain the API-equivalent comparison. These classes and `unknown/unpriced` are never added into one invoice-like total.
 
 ## Recipes
 
@@ -75,15 +110,15 @@ jq -s 'sort_by(.completed_at) | reverse | .[] | {
 }' .claude/usage-stats/*.json
 ```
 
-### Total cost per ticket (rough Opus 4.x pricing)
+### Model-aware accounting
 ```bash
-# Per-million-token rates: input $15, output $75, cache_create $18.75, cache_read $1.50.
-jq -s 'map({
-  ticket,
-  usd: ((.totals.input * 15 + .totals.output * 75 + .totals.cache_create * 18.75 + .totals.cache_read * 1.5) / 1000000)
-}) | sort_by(.usd) | reverse' .claude/usage-stats/*.json
+# All history, deduped across cumulative snapshots:
+node bin/usage-report.mjs --json
+
+# One day (allocation happens before filtering):
+node bin/usage-report.mjs --date 2026-07-15 --json
 ```
-Treat as a relative ranking, not invoicing — for billing-grade numbers, see Anthropic Console.
+The output keeps actual API estimates, API-equivalent estimates, subscription no-bill usage, and unknown/unpriced usage separate. Provider consoles remain billing-authoritative.
 
 ### Tool/MCP frequency across all tickets
 ```bash
@@ -180,7 +215,7 @@ jq -s '[.[]|select(.type=="assistant")|.message.content[]?|select(.type=="tool_u
 ```
 
 ### 4. Compose the JSON manually and drop it in `.claude/usage-stats/`
-Mirror the schema above. Use the session's actual `completed_at` (UTC) rather than "now" if you're backfilling much later.
+Prefer the helper so record ordinals/model IDs are preserved. A hand-built legacy file containing the top-level fields above remains readable, but without `assistant_usage` it is deliberately model-unknown/unpriced. Use the session's actual `completed_at` (UTC) rather than "now" if backfilling.
 
 ## Failure modes + observability of the recovery itself
 
@@ -188,7 +223,7 @@ Mirror the schema above. Use the session's actual `completed_at` (UTC) rather th
 - **Long/resumed land no longer aborts (fixed)** → a background job that is context-resumed/compacted keeps writing under a NEW session id. The old code trusted a frozen pointer and aborted on a >5-min freshness guard — the V-1/V-21 silent no-op. There is now **no freshness gate**: the primary binds via the resume-rewritten capture-hook sidecar (or content-match), so a >24h resume lands correctly. Recover anomalies with `--session`.
 - **Stats over-count vs. expectation** → headline `totals` cover the **primary session only** by design (see `scope`). If you expected a whole-lifecycle sum, walk `related_sessions` and sum the ones that genuinely worked the ticket — they are deliberately not auto-summed because content-match over-includes incidental mentions.
 - **`session_id` in stats doesn't match any JSONL on disk** → the transcript was deleted (`~/.claude/projects/...` is user-managed; some users prune older sessions). Cross-reference is broken; the stats file alone remains useful.
-- **Multiple tickets in one session** (a `/next-ticket → land → next-ticket → land` chain in one Claude Code session) → each `/land-ticket` writes its own stats file, but they ALL share the same `session_id`. Cumulative totals in those files are cumulative for the *session*, not per-ticket. If you need per-ticket delta, diff `cache_read` between successive landings (rough — overlaps the build phases).
+- **Multiple tickets in one session** → each land still writes a cumulative primary-session snapshot, but `usage-report.mjs` and `scorecard.mjs` allocate each `assistant_usage` ordinal once across files. Legacy files without ordinals use non-negative per-session deltas. Use those helpers rather than summing raw files.
 
 ## Housekeeping
 

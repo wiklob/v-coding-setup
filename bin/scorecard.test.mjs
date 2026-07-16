@@ -7,7 +7,8 @@
 // including the dedup that keeps "land-ticket · §5 · …" and "land-ticket §5 · …"
 // as ONE gate (a split would have hidden that §6.7 was intervened once).
 
-import { readJsonl, buildSessionTicketMap, parseGateAudit, sessionFindingsFor } from "./scorecard.mjs";
+import { readJsonl, buildSessionTicketMap, parseGateAudit, sessionFindingsFor, tokenEconomicsFor } from "./scorecard.mjs";
+import { allocateUsageStats } from "./usage-accounting.mjs";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -124,6 +125,38 @@ function check(name, cond) {
   const map = new Map([["sConflict", "V-999"]]); // session maps to a DIFFERENT ticket
   check("lens-(a): a ticket-stamped row joins its own ticket", sessionFindingsFor("V-234", rows, map).count === 1);
   check("lens-(a): a ticket-stamped row does NOT also join the session-map's ticket (no double-attribution)", sessionFindingsFor("V-999", rows, map).count === 0);
+}
+
+// --- V-378: token economics consumes normalized model-aware allocations ---
+{
+  const rec = (ordinal, model, output) => ({ ordinal, model_id: model, command: "go", usage: { output } });
+  const stats = allocateUsageStats([
+    {
+      ticket: "V-378",
+      session_id: "same-session",
+      completed_at: "2026-07-15T10:00:00Z",
+      totals: { output: 10, assistant_msg_count: 1 },
+      assistant_usage: [rec(1, "claude-opus-4-8", 10)],
+      billing_context: { default_mode: "subscription" },
+      tool_result_bytes: { Read: 100 },
+    },
+    {
+      ticket: "V-378",
+      session_id: "same-session",
+      completed_at: "2026-07-15T11:00:00Z",
+      totals: { output: 30, assistant_msg_count: 2 },
+      assistant_usage: [rec(1, "claude-opus-4-8", 10), rec(2, "gpt-5.6-sol", 20)],
+      billing_context: { default_mode: "unknown" },
+      tool_result_bytes: { Read: 140 },
+    },
+  ]);
+  const te = tokenEconomicsFor("V-378", stats);
+  check("token economics does not double-count cumulative output", te.output === 30);
+  check("token economics reports one distinct session from two snapshots", te.sessions === 1 && te.statsFiles === 2);
+  check("token economics keeps mixed-model totals", te.models.length === 2);
+  check("token economics preserves subscription classification", te.accounting.models.some((m) => m.classification === "subscription usage — no token bill"));
+  check("token economics preserves API-equivalent classification", te.accounting.models.some((m) => m.classification === "API-equivalent estimate"));
+  check("tool response bytes use snapshot deltas", te.topTools[0][1] === 140);
 }
 
 console.log(`\n${fails === 0 ? "ALL PASS" : fails + " FAILED"}`);

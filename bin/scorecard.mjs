@@ -51,6 +51,7 @@
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
+import { allocateUsageStats, summarizeAllocations, summarizeAccounting } from "./usage-accounting.mjs";
 
 // ---------------------------------------------------------------------------
 // Path resolution — canonical (main) checkout.
@@ -193,7 +194,7 @@ function parseGateAudit(path = P.gateAudit) {
 function tokenEconomicsFor(ticket, stats) {
   const mine = stats.filter((s) => s.ticket === ticket);
   if (!mine.length) return null;
-  const sum = (sel) => mine.reduce((a, s) => a + (sel(s) || 0), 0);
+  const summary = summarizeAllocations(mine);
   const byTool = {};
   for (const s of mine) {
     for (const [t, b] of Object.entries(s.tool_result_bytes || {})) byTool[t] = (byTool[t] || 0) + b;
@@ -205,10 +206,14 @@ function tokenEconomicsFor(ticket, stats) {
     }
   }
   return {
-    sessions: mine.length,
-    output: sum((s) => s.totals?.output),
-    input: sum((s) => s.totals?.input),
-    cacheRead: sum((s) => s.totals?.cache_read),
+    sessions: new Set(mine.map((s) => s.session_id).filter(Boolean)).size || mine.length,
+    statsFiles: mine.length,
+    output: summary.totals.output,
+    input: summary.totals.input,
+    cacheRead: summary.totals.cache_read,
+    cacheCreate: summary.totals.cache_create,
+    models: Object.values(summary.usage_by_model).sort((a, b) => b.totals.output - a.totals.output),
+    accounting: summary.accounting,
     topTools: Object.entries(byTool).sort((a, b) => b[1] - a[1]).slice(0, 5),
     topCommands: Object.entries(byCommand).sort((a, b) => b[1] - a[1]).slice(0, 5),
   };
@@ -290,7 +295,7 @@ function gateFrictionFor(ticket, blocks) {
 // Per-ticket scorecard.
 // ---------------------------------------------------------------------------
 function buildScorecard(ticket) {
-  const stats = loadUsageStats();
+  const stats = allocateUsageStats(loadUsageStats());
   const sessionMap = buildSessionTicketMap(stats);
   const errors = readJsonl(P.errors);
   const toolFit = readJsonl(P.toolFit);
@@ -317,6 +322,21 @@ function fmtBytes(n) {
 function fmtNum(n) {
   return n.toLocaleString("en-US");
 }
+function fmtUsd(n) {
+  return `$${(n || 0).toFixed(2)}`;
+}
+function renderAccountingLines(accounting, prefix = "- ") {
+  const lines = [];
+  for (const model of accounting?.models || []) {
+    const name = model.observed_model || "(missing-model)";
+    let amount = "";
+    if (model.classification === "subscription usage — no token bill") amount = ` · API equivalent ${fmtUsd(model.api_equivalent_usd)}`;
+    else if (model.estimate_usd != null) amount = ` · ${fmtUsd(model.estimate_usd)}`;
+    const reason = model.reason ? ` · ${model.reason}` : "";
+    lines.push(`${prefix}${name}: ${model.classification}${amount}${reason} · output ${fmtNum(model.totals.output)}`);
+  }
+  return lines;
+}
 
 function renderScorecard(sc) {
   const L = [];
@@ -326,7 +346,9 @@ function renderScorecard(sc) {
   L.push("## (c) Token economics");
   if (sc.tokenEconomics) {
     const te = sc.tokenEconomics;
-    L.push(`- ${te.sessions} session(s) · output ${fmtNum(te.output)} · input ${fmtNum(te.input)} · cache-read ${fmtNum(te.cacheRead)}`);
+    const files = te.statsFiles !== te.sessions ? ` · ${te.statsFiles} cumulative snapshot(s)` : "";
+    L.push(`- ${te.sessions} session(s)${files} · output ${fmtNum(te.output)} · input ${fmtNum(te.input)} · cache-read ${fmtNum(te.cacheRead)}`);
+    L.push(...renderAccountingLines(te.accounting));
     if (te.topCommands.length) L.push(`- top output by command: ${te.topCommands.map(([c, v]) => `${c} ${fmtNum(v)}`).join(" · ")}`);
     if (te.topTools.length) L.push(`- top tool_result re-read bytes: ${te.topTools.map(([t, b]) => `${t} ${fmtBytes(b)}`).join(" · ")}`);
   } else L.push("- no data for lens (c) — no usage-stats file for this ticket");
@@ -383,7 +405,7 @@ function renderScorecard(sc) {
 // Cross-session aggregate.
 // ---------------------------------------------------------------------------
 function buildAggregate() {
-  const stats = loadUsageStats();
+  const stats = allocateUsageStats(loadUsageStats());
   const sessionMap = buildSessionTicketMap(stats);
   const errors = readJsonl(P.errors);
   const toolFit = readJsonl(P.toolFit);
@@ -391,15 +413,32 @@ function buildAggregate() {
   const feedback = readJsonl(P.feedback);
   const blocks = parseGateAudit();
 
-  // Cost — by ticket (output tokens) and by tool (re-read bytes).
+  // Cost — normalized allocations prevent cumulative session snapshots from being
+  // counted twice. Keep output-token rankings for compatibility and add billing classes.
   const byTicketOutput = {};
+  const byTicketAccounting = {};
   const byToolBytes = {};
   for (const s of stats) {
-    if (s.ticket) byTicketOutput[s.ticket] = (byTicketOutput[s.ticket] || 0) + (s.totals?.output || 0);
+    if (s.ticket) {
+      byTicketOutput[s.ticket] = (byTicketOutput[s.ticket] || 0) + (s.totals?.output || 0);
+      (byTicketAccounting[s.ticket] ||= []).push(s.accounting);
+    }
     for (const [t, b] of Object.entries(s.tool_result_bytes || {})) byToolBytes[t] = (byToolBytes[t] || 0) + b;
   }
   const costTickets = Object.entries(byTicketOutput).sort((a, b) => b[1] - a[1]).slice(0, 10);
   const costTools = Object.entries(byToolBytes).sort((a, b) => b[1] - a[1]).slice(0, 10);
+  // Rank per class separately — the four billing classes are never comparable,
+  // so a single cross-class scalar would be meaningless (V-378). Each ranking is
+  // sorted by its own class total; a ticket may appear in more than one.
+  const ranked = Object.entries(byTicketAccounting).map(([ticket, rows]) => ({ ticket, accounting: summarizeAccounting(rows) }));
+  const rankBy = (sel) => ranked.filter((r) => sel(r.accounting.totals) > 0).sort((a, b) => sel(b.accounting.totals) - sel(a.accounting.totals)).slice(0, 10).map((r) => ({ ticket: r.ticket, usd: sel(r.accounting.totals), accounting: r.accounting }));
+  const billingTickets = {
+    actual_api: rankBy((t) => t.actual_api_estimate_usd),
+    api_equivalent: rankBy((t) => t.api_equivalent_estimate_usd),
+    subscription_api_equivalent: rankBy((t) => t.subscription_api_equivalent_usd),
+    unknown_output_tokens: rankBy((t) => t.unknown_unpriced_tokens.output),
+  };
+  const accounting = summarizeAccounting(stats.map((s) => s.accounting));
 
   // Quality — produced-review missed/partial by ticket.
   const qualTickets = {};
@@ -503,8 +542,11 @@ function buildAggregate() {
   }
 
   return {
-    sessionsAnalyzed: stats.length,
+    sessionsAnalyzed: new Set(stats.map((s) => s.session_id).filter(Boolean)).size || stats.length,
+    statsFilesAnalyzed: stats.length,
     costTickets,
+    billingTickets,
+    accounting,
     costTools,
     qualOffenders,
     ceremonySteps,
@@ -522,11 +564,27 @@ function buildAggregate() {
 function renderAggregate(ag) {
   const L = [];
   L.push(`# Cross-session aggregate — ceremony vs load-bearing`);
-  L.push(`Analyzed ${ag.sessionsAnalyzed} usage-stats session(s) · ${ag.gateRows.length} distinct gate(s) · review-session findings: ${ag.reviewAttribution.total} (${ag.reviewAttribution.attributable} ticket-attributable)`);
+  const files = ag.statsFilesAnalyzed !== ag.sessionsAnalyzed ? ` from ${ag.statsFilesAnalyzed} cumulative snapshot(s)` : "";
+  L.push(`Analyzed ${ag.sessionsAnalyzed} usage-stats session(s)${files} · ${ag.gateRows.length} distinct gate(s) · review-session findings: ${ag.reviewAttribution.total} (${ag.reviewAttribution.attributable} ticket-attributable)`);
   L.push("");
   L.push("## Top cost offenders");
   L.push("### by output tokens (ticket)");
   for (const [t, v] of ag.costTickets) L.push(`- ${t}: ${fmtNum(v)} output tokens`);
+  L.push("### by model-aware accounting (per class — classes never combined)");
+  const classLabels = [
+    ["actual_api", "actual API estimate"],
+    ["api_equivalent", "API-equivalent estimate"],
+    ["subscription_api_equivalent", "subscription usage — no token bill (API equivalent)"],
+    ["unknown_output_tokens", "unknown/unpriced output tokens"],
+  ];
+  for (const [key, label] of classLabels) {
+    const rows = ag.billingTickets[key] || [];
+    if (!rows.length) continue;
+    L.push(`#### ${label}`);
+    for (const row of rows) L.push(`- ${row.ticket}: ${key === "unknown_output_tokens" ? `${fmtNum(row.usd)} tok` : fmtUsd(row.usd)}`);
+  }
+  L.push("### categorized totals (never combined into one bill)");
+  L.push(...renderAccountingLines(ag.accounting));
   L.push("### by tool_result re-read bytes (tool)");
   for (const [t, b] of ag.costTools) L.push(`- ${t}: ${fmtBytes(b)}`);
   L.push("");

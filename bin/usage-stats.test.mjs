@@ -7,7 +7,7 @@
 import { writeFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { scan, selectTranscript } from "./usage-stats.mjs";
+import { scan, selectTranscript, parseBillingContext } from "./usage-stats.mjs";
 
 let fails = 0;
 function check(name, cond) {
@@ -23,6 +23,7 @@ const lines = [
     type: "assistant",
     timestamp: "2026-06-01T10:00:00.000Z",
     message: {
+      model: "gpt-5.6-sol",
       usage: {
         input_tokens: 10,
         output_tokens: 20,
@@ -42,6 +43,7 @@ const lines = [
     type: "assistant",
     timestamp: "2026-06-01T10:05:00.000Z",
     message: {
+      model: "claude-opus-4-8",
       usage: { input_tokens: 1, output_tokens: 2 },
       content: [
         { type: "tool_use", name: "Bash", input: { command: "ls -la" } },
@@ -72,12 +74,45 @@ try {
 
   check("first assistant ts captured", r.firstAssistantTs === "2026-06-01T10:00:00.000Z");
   check("last assistant ts captured", r.lastAssistantTs === "2026-06-01T10:05:00.000Z");
+
+  check("persists one record per assistant usage", r.assistantUsage.length === 2);
+  check("usage records carry stable assistant ordinals", r.assistantUsage[0].ordinal === 1 && r.assistantUsage[1].ordinal === 2);
+  check("usage records preserve exact model ids", r.assistantUsage[0].model_id === "gpt-5.6-sol" && r.assistantUsage[1].model_id === "claude-opus-4-8");
+  check("aggregates mixed-model usage", r.usageByModel["gpt-5.6-sol"].totals.output === 20 && r.usageByModel["claude-opus-4-8"].totals.output === 2);
+  check("per-command bucket retains model split", Object.keys(r.byCommand["(uncommanded)"].usage_by_model).length === 2);
 } finally {
   try {
     unlinkSync(fixture);
   } catch {
     /* ignore */
   }
+}
+
+// Missing message.model is retained as null and never replaced with a priced model.
+{
+  const missingFixture = join(tmpdir(), `usage-stats-missing-model-${process.pid}.jsonl`);
+  writeFileSync(
+    missingFixture,
+    JSON.stringify({ type: "assistant", timestamp: "2026-06-01T11:00:00.000Z", message: { usage: { output_tokens: 7 } } }) + "\n"
+  );
+  try {
+    const r = await scan(missingFixture);
+    check("missing model is explicit on the usage record", r.assistantUsage[0].model_id === null);
+    check("missing model aggregates in its own bucket", r.usageByModel["(missing-model)"].totals.output === 7);
+  } finally {
+    unlinkSync(missingFixture);
+  }
+}
+
+// Billing mode defaults are honest and exact model overrides are supported.
+{
+  const fromEnv = parseBillingContext({}, { V_USAGE_BILLING_MODE: "subscription" });
+  check("billing default can come from env", fromEnv.default_mode === "subscription" && fromEnv.source === "env");
+  const mixed = parseBillingContext(
+    { "billing-mode": "subscription", "billing-model": ["gpt-5.6-sol=actual-api"] },
+    {}
+  );
+  check("per-model billing override parses", mixed.model_overrides["gpt-5.6-sol"] === "actual-api");
 }
 
 // --- selectTranscript: the --session exact/prefix resolution rule (V-76) -------

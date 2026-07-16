@@ -13,17 +13,16 @@ Write a durable dated **summary of today** so the pipeline's activity is legible
 ## 0. Flags + setup
 - `--yes` — non-interactive (the launchd runner passes this). There are no confirm gates here anyway; the flag just documents the unattended intent.
 - `--dry-run` — print the assembled artifact to stdout instead of writing the file (for inspection/verification).
-- `ROOT=~/.claude` (the canonical checkout — the launchd runner `cd`s here). `TODAY=$(date +%F)` (e.g. `2026-07-02`).
+- `ROOT=~/.claude` (the canonical checkout — the launchd runner `cd`s here). `TODAY=$(date -u +%F)` (e.g. `2026-07-02`). **Use UTC (`-u`)** — usage-stats `completed_at` is stamped in UTC, and `usage-report.mjs --date` matches the UTC prefix, so a local date would misplace lands recorded near midnight.
 - Artifact path: `$ROOT/pipeline/daily/$TODAY-summary.md`. Ensure the dir: `mkdir -p "$ROOT/pipeline/daily"`.
 
 ## 1. Gather the day's data (all local, fail-open)
 Every source is best-effort: if a gather yields nothing, the section says "none today" — **never crash the unattended run**.
 
-- **Lands + per-ticket cost** — `/land-ticket` writes one `usage-stats` JSON per landed ticket (`bin/usage-stats.mjs`). Today's lands: list with **`find`, not a bare shell glob** — a non-matching `*.json` glob *errors* under zsh ("no matches found") and only degrades empty under bash, so `find` is shell-independent and fail-open by construction:
-  `find "$ROOT/.claude/usage-stats" -maxdepth 1 -name "$TODAY-*.json" 2>/dev/null` — filenames are `YYYY-MM-DD-HHMMSS-<TICKET>.json`. For each match, read `ticket` + `totals` (`{input, output, cache_read, cache_create}`) via `node -e` / `jq`. These files ARE the day's lands (one per landed ticket). No matches → "No tickets landed today."
+- **Lands + model-aware accounting** — run `node "$ROOT/bin/usage-report.mjs" --date "$TODAY" --json`. This helper reads the complete usage-stats history, allocates cumulative snapshots once per `session_id + assistant ordinal`, then filters to today—so a session that lands twice cannot double-count its earlier turns. Its `lands[]` are today's authoritative land allocations; each carries ticket/PR, token totals, `usage_by_model`, and categorized accounting. No rows → "No tickets landed today."
 - **`/go`-run friction** — today's blocks in the gate-audit friction map: `grep -A2 "^## $TODAY " "$ROOT/pipeline/audit/gate-audit.md"`. Block header is `## <date> <time> — <TICKET> (<completed | forced-halt at <phase>>)` followed by a `Tallies: p'd N · intervened N · forced N` line. This is a `/go`-only proxy (a bare `/land` outside `/go` appends nothing; a `forced-halt` block is a run with no land) — report it as **`/go` runs + tallies**, not as the authoritative land list (the usage-stats files above are that).
 - **Feedback received today** — date-filter the feedback sink: `grep "\"ts\":\"$TODAY" "$ROOT/pipeline/audit/feedback.jsonl" 2>/dev/null`. Each line `{ts, session, conversation, subject, note}`. Summarize `subject` + `note`; do not route (that is `/harvest-feedback`'s job — just recap what came in).
-- **Total token usage today** — sum `totals.input/output/cache_read/cache_create` across all today's usage-stats files (from the Lands gather); also count tool calls if cheap. One aggregate line.
+- **Total usage today** — use the helper's top-level `totals` and `accounting`; never independently sum raw files. Render each present class separately: `actual API estimate`, `API-equivalent estimate`, `subscription usage — no token bill` (optional API-equivalent comparison), and `unknown/unpriced` with its reason. Never combine these into one dollar bill.
 
 ## 2. Assemble + write the artifact
 Compose this markdown (fail-open: an empty source → "none today"):
@@ -34,6 +33,7 @@ Compose this markdown (fail-open: an empty source → "none today"):
 
 ## Lands (<N> today)
 - <TICKET> — <one-line what, if derivable from the ticket/branch> · <output-tokens>k out / <cache_read>k cached
+  - <model>: <billing classification + estimate/no-bill label>  (one bullet per model in the land's usage_by_model; a mixed-model land lists each)
 - … (or "No tickets landed today.")
 
 ## /go runs & gate friction
@@ -45,8 +45,12 @@ Compose this markdown (fail-open: an empty source → "none today"):
 - … (or "No feedback logged today.")
 
 ## Usage
-- Total: <output>k output · <cache_read>k cache-read · <cache_create>k cache-create · across <N> landed sessions
-- (or "No usage recorded today.")
+- Tokens: <output>k output · <cache_read>k cache-read · <cache_create>k cache-create · across <N> landed sessions
+- <MODEL>: actual API estimate $<n>
+- <MODEL>: API-equivalent estimate $<n>
+- <MODEL>: subscription usage — no token bill (API equivalent $<n>, when priced)
+- <MODEL>: unknown/unpriced (<missing-model | unknown-model | stale-pricing>)
+- Omit absent classes; never add the four classes into one bill. (Or "No usage recorded today.")
 
 ## Notes for tomorrow's plan
 - <1–3 bullets: carryover, an unresolved forced-halt to retry, a feedback theme worth acting on — the seed /daily-plan reads first. Keep it short and honest; omit if nothing stands out.>

@@ -65,6 +65,12 @@ import { homedir } from "node:os";
 import { createInterface } from "node:readline";
 import { resolveTicket } from "./transcript-resolver.mjs";
 import { resolveConversationId } from "./session-identity.mjs";
+import {
+  accountUsageByModel,
+  accountingForRecords,
+  addModelUsage,
+  normalizeBillingMode,
+} from "./usage-accounting.mjs";
 
 function parseArgs(argv) {
   const out = {};
@@ -76,11 +82,29 @@ function parseArgs(argv) {
     if (next === undefined || next.startsWith("--")) {
       out[key] = true; // boolean flag (e.g. --dry-run)
     } else {
-      out[key] = next;
+      if (key === "billing-model") (out[key] ||= []).push(next);
+      else out[key] = next;
       i++;
     }
   }
   return out;
+}
+
+function parseBillingContext(args, env = process.env) {
+  const cliMode = args["billing-mode"];
+  const envMode = env.V_USAGE_BILLING_MODE;
+  const defaultMode = normalizeBillingMode(cliMode ?? envMode ?? "unknown");
+  const modelOverrides = Object.create(null);
+  for (const item of args["billing-model"] || []) {
+    const at = item.lastIndexOf("=");
+    if (at <= 0 || at === item.length - 1) throw new Error(`invalid --billing-model '${item}' (expected <model-id>=<mode>)`);
+    modelOverrides[item.slice(0, at)] = normalizeBillingMode(item.slice(at + 1));
+  }
+  return {
+    default_mode: defaultMode,
+    model_overrides: modelOverrides,
+    source: cliMode != null || Object.keys(modelOverrides).length ? "cli" : envMode != null ? "env" : "default",
+  };
 }
 
 const HOME = homedir();
@@ -301,6 +325,7 @@ function blankBucket() {
     cache_create: 0,
     assistant_msg_count: 0,
     tool_calls: {},
+    usage_by_model: Object.create(null),
   };
 }
 
@@ -334,9 +359,14 @@ async function scan(file) {
   let failedCalls = 0;
   let firstAssistantTs = null;
   let lastAssistantTs = null;
+  let assistantOrdinal = 0;
+  let fallbackUsageLine = 0;
+  const seenUsageRequests = new Set();
+  const assistantUsage = [];
+  const usageByModel = Object.create(null);
 
   // V-79 attribution state.
-  const byCommand = {};
+  const byCommand = Object.create(null);
   let activeCmd = NO_CMD;
   const toolUseIdToName = {}; // tool_use id → tool name (assistant side)
   const toolResultBytesByTool = {}; // tool name → Σ serialized result length (all calls; back-compat)
@@ -345,7 +375,10 @@ async function scan(file) {
   // call can't pollute the size headline (the V-107 averaged-in 5 KB save_issue).
   const toolResultSizesOkByTool = {}; // tool name → [byte length] for successful calls
   const toolResultSizesErrByTool = {}; // tool name → [byte length] for errored/interrupted calls
-  const bucket = (cmd) => (byCommand[cmd] ??= blankBucket());
+  const bucket = (cmd) => {
+    if (!Object.prototype.hasOwnProperty.call(byCommand, cmd)) byCommand[cmd] = blankBucket();
+    return byCommand[cmd];
+  };
 
   const rl = createInterface({
     input: createReadStream(file),
@@ -389,19 +422,41 @@ async function scan(file) {
     }
 
     if (obj.type !== "assistant") continue;
-    totals.assistant_msg_count++;
     const b = bucket(activeCmd);
-    b.assistant_msg_count++;
     const usage = obj.message?.usage;
     if (usage) {
-      totals.input += usage.input_tokens ?? 0;
-      totals.output += usage.output_tokens ?? 0;
-      totals.cache_read += usage.cache_read_input_tokens ?? 0;
-      totals.cache_create += usage.cache_creation_input_tokens ?? 0;
-      b.input += usage.input_tokens ?? 0;
-      b.output += usage.output_tokens ?? 0;
-      b.cache_read += usage.cache_read_input_tokens ?? 0;
-      b.cache_create += usage.cache_creation_input_tokens ?? 0;
+      const requestId = obj.requestId ?? `line-${fallbackUsageLine++}`;
+      if (!seenUsageRequests.has(requestId)) {
+        seenUsageRequests.add(requestId);
+        assistantOrdinal++;
+        totals.assistant_msg_count++;
+        b.assistant_msg_count++;
+        const modelId = typeof obj.message?.model === "string" && obj.message.model ? obj.message.model : null;
+        const tokenUsage = {
+          input: Number(usage.input_tokens) || 0,
+          output: Number(usage.output_tokens) || 0,
+          cache_read: Number(usage.cache_read_input_tokens) || 0,
+          cache_create: Number(usage.cache_creation_input_tokens) || 0,
+        };
+        totals.input += tokenUsage.input;
+        totals.output += tokenUsage.output;
+        totals.cache_read += tokenUsage.cache_read;
+        totals.cache_create += tokenUsage.cache_create;
+        b.input += tokenUsage.input;
+        b.output += tokenUsage.output;
+        b.cache_read += tokenUsage.cache_read;
+        b.cache_create += tokenUsage.cache_create;
+        addModelUsage(usageByModel, modelId, { ...tokenUsage, assistant_msg_count: 1 });
+        addModelUsage(b.usage_by_model, modelId, { ...tokenUsage, assistant_msg_count: 1 });
+        assistantUsage.push({
+          ordinal: assistantOrdinal,
+          request_id: obj.requestId ?? null,
+          timestamp: obj.timestamp ?? null,
+          command: activeCmd,
+          model_id: modelId,
+          usage: tokenUsage,
+        });
+      }
     }
     const content = obj.message?.content;
     if (Array.isArray(content)) {
@@ -428,6 +483,8 @@ async function scan(file) {
     failedCalls,
     firstAssistantTs,
     lastAssistantTs,
+    assistantUsage,
+    usageByModel,
     byCommand,
     toolResultBytesByTool,
     toolResultCountByTool,
@@ -440,17 +497,20 @@ function isoTrim(ts) {
   return ts ? ts.replace(/\.\d+Z$/, "Z") : null;
 }
 
-// V-79 — per-Mtok USD pricing (Opus 4.x, from docs usage-stats.md). cache_read is the
-// cheap re-read price a verbose tool_result pays on EVERY subsequent turn it sits in
-// the cached prefix — which is why response verbosity, not call count, dominates MCP cost.
-const PRICE = { input: 15, output: 75, cache_create: 18.75, cache_read: 1.5 };
-const usd = (t) =>
-  ((t.input ?? 0) * PRICE.input +
-    (t.output ?? 0) * PRICE.output +
-    (t.cache_create ?? 0) * PRICE.cache_create +
-    (t.cache_read ?? 0) * PRICE.cache_read) /
-  1e6;
 const k = (n) => (n / 1000).toFixed(1) + "k";
+const money = (n) => `$${(n || 0).toFixed(2)}`;
+
+function accountingHeadline(accounting) {
+  const t = accounting.totals;
+  const parts = [];
+  if (t.actual_api_estimate_usd) parts.push(`actual API estimate ${money(t.actual_api_estimate_usd)}`);
+  if (t.api_equivalent_estimate_usd) parts.push(`API-equivalent estimate ${money(t.api_equivalent_estimate_usd)}`);
+  if (accounting.models.some((m) => m.classification === "subscription usage — no token bill")) {
+    parts.push(`subscription usage — no token bill (API equivalent ${money(t.subscription_api_equivalent_usd)})`);
+  }
+  if (accounting.models.some((m) => m.classification === "unknown/unpriced")) parts.push("unknown/unpriced present");
+  return parts.join(" · ") || "no priced usage";
+}
 
 // V-143 — distribution helpers over an ascending-sorted number[] (nearest-rank
 // percentile, clamped; both 0 on empty). Used for the per-call size headline.
@@ -466,22 +526,27 @@ const median = (sorted) => {
 // Two questions answered: (1) where did the session's $ go, by phase? (2) for the
 // expensive tools (esp. mcp__linear__*), how big are their RESPONSES — the bytes that
 // re-enter the cached context every following turn?
-function printAttribution(scanned) {
-  const cmds = Object.entries(scanned.byCommand).sort((a, b) => usd(b[1]) - usd(a[1]));
-  const sessTotal = usd(scanned.totals) || 1; // guard /0
-  console.log("\n— Token attribution by command (V-79) —");
-  console.log("command           msgs    out-tok   cache-rd      $     %sess");
+function printAttribution(scanned, accounting, asOf, billingContext) {
+  const cmds = Object.entries(scanned.byCommand).sort((a, b) => (b[1].output || 0) - (a[1].output || 0));
+  console.log("\n— Token attribution by command (V-79/V-378) —");
+  console.log("command           msgs    out-tok   cache-rd  models");
   for (const [cmd, b] of cmds) {
-    const cost = usd(b);
+    const models = Object.keys(b.usage_by_model || {}).join(",") || "(none)";
     console.log(
-      `${cmd.padEnd(16)} ${String(b.assistant_msg_count).padStart(5)}  ${k(b.output).padStart(8)}  ${k(b.cache_read).padStart(9)}  ${("$" + cost.toFixed(2)).padStart(7)}  ${((cost / sessTotal) * 100).toFixed(0).padStart(4)}%`
+      `${cmd.padEnd(16)} ${String(b.assistant_msg_count).padStart(5)}  ${k(b.output).padStart(8)}  ${k(b.cache_read).padStart(9)}  ${models}`
     );
+    const commandAccounting = accountUsageByModel(b.usage_by_model, { asOf, billingContext });
+    console.log(`  ${accountingHeadline(commandAccounting)}`);
   }
-  console.log(`(session total $${usd(scanned.totals).toFixed(2)})`);
-  // V-143/D — %sess demoted to a caveated secondary: it is non-deterministic
-  // (swings with how much file-reading a run did — 2% vs 5% on the same session).
-  // The deterministic headline is the per-call size distribution below.
-  console.log("(%sess is a non-deterministic SECONDARY metric — it varies with per-session file-read volume; the per-call size distribution below is the deterministic headline.)");
+
+  console.log("\n— Model accounting (sourced prices; no fallback) —");
+  for (const model of accounting.models) {
+    const name = model.observed_model || "(missing-model)";
+    const estimate = model.estimate_usd == null ? "no token bill/estimate" : money(model.estimate_usd);
+    const reason = model.reason ? ` · ${model.reason}` : "";
+    console.log(`- ${name}: ${model.classification} · ${estimate}${reason}`);
+  }
+  console.log(`Session: ${accountingHeadline(accounting)}`);
 
   // V-143 — HEADLINE: per-call response-size DISTRIBUTION over SUCCESSFUL calls
   // only (min/median/p95/max), so a single interrupted/errored outlier can't fool
@@ -526,12 +591,35 @@ function printAttribution(scanned) {
   );
 }
 
+function findSessionCheckpoint(statsDir, sessionId) {
+  let maxOrdinal = 0;
+  let snapshots = 0;
+  let maxSnapshotOrdinal = 0;
+  if (!existsSync(statsDir)) return { maxOrdinal, nextSnapshotOrdinal: 1 };
+  for (const file of readdirSync(statsDir)) {
+    if (!file.endsWith(".json")) continue;
+    try {
+      const row = JSON.parse(readFileSync(join(statsDir, file), "utf8"));
+      if (row.session_id !== sessionId) continue;
+      snapshots++;
+      maxSnapshotOrdinal = Math.max(maxSnapshotOrdinal, Number(row.snapshot_ordinal) || 0);
+      for (const record of row.assistant_usage || []) {
+        if (Number.isInteger(record.ordinal)) maxOrdinal = Math.max(maxOrdinal, record.ordinal);
+      }
+    } catch {
+      // A malformed historical file is already surfaced by report readers; it must
+      // not block writing the current valid snapshot.
+    }
+  }
+  return { maxOrdinal, nextSnapshotOrdinal: Math.max(snapshots, maxSnapshotOrdinal) + 1 };
+}
+
 // ---------------------------------------------------------------------------
 // Exports for testing (usage-stats.test.mjs). scan() is the streaming counter;
 // discoverPrimary() is the identity-binding resolver; selectTranscript() is the
 // pure --session exact/prefix selection rule.
 // ---------------------------------------------------------------------------
-export { scan, discoverPrimary, selectTranscript };
+export { scan, discoverPrimary, selectTranscript, parseBillingContext };
 
 // ---------------------------------------------------------------------------
 // CLI — only when run directly, not when imported by the test.
@@ -546,11 +634,18 @@ if (!isMain) {
 async function runCli() {
 const args = parseArgs(process.argv.slice(2));
 if (!args || !args.ticket) {
-  console.error("Usage: --ticket <ID> [--pr <n>] [--session <id>] [--dry-run] [--by-command]");
+  console.error("Usage: --ticket <ID> [--pr <n>] [--session <id>] [--dry-run] [--by-command] [--billing-mode <mode>] [--billing-model <id>=<mode>]");
   process.exit(3);
 }
 const ticket = String(args.ticket);
 const pr = args.pr != null ? String(args.pr) : "";
+let billingContext;
+try {
+  billingContext = parseBillingContext(args);
+} catch (e) {
+  console.error(`ERROR: ${e.message}`);
+  process.exit(3);
+}
 
 // 1. Resolve + scan the primary session.
 let primary;
@@ -609,7 +704,11 @@ console.log(
     `(${sameConvoCount} in the primary's conversation, the rest name-drops).`
 );
 
+const now = new Date();
+const stamp = now.toISOString();
+const accounting = accountingForRecords(scanned.assistantUsage, { asOf: stamp, billingContext });
 const payload = {
+  schema_version: 2,
   ticket,
   pr: /^\d+$/.test(pr) ? Number(pr) : pr || null,
   scope: "primary-session", // headline totals cover the primary session only
@@ -618,8 +717,12 @@ const payload = {
   session_jsonl: basename(primary.path),
   primary_source: primary.source,
   started_at: isoTrim(scanned.firstAssistantTs),
-  completed_at: null, // filled below (skipped on dry-run)
+  completed_at: stamp,
   totals: scanned.totals,
+  assistant_usage: scanned.assistantUsage,
+  usage_by_model: scanned.usageByModel,
+  billing_context: billingContext,
+  accounting,
   tool_calls: scanned.toolCalls,
   compound_bash: scanned.compoundBash,
   failed_calls: scanned.failedCalls,
@@ -630,8 +733,8 @@ const payload = {
   tool_result_count: scanned.toolResultCountByTool,
 };
 
-// V-79 — `--by-command` prints the per-phase + per-tool cost breakdown to console.
-if (args["by-command"]) printAttribution(scanned);
+// V-79/V-378 — print per-phase tokens, sourced model accounting, and tool payloads.
+if (args["by-command"]) printAttribution(scanned, accounting, stamp, billingContext);
 
 if (args["dry-run"]) {
   console.log(JSON.stringify(payload, null, 2));
@@ -660,14 +763,20 @@ if (!mainWt) {
 const statsDir = join(mainWt, ".claude/usage-stats");
 mkdirSync(statsDir, { recursive: true });
 
-const now = new Date();
-const stamp = now.toISOString().replace(/\.\d+Z$/, "Z");
+// Persist only records not already present in an earlier snapshot for this
+// session. Top-level totals/usage_by_model remain cumulative for compatibility;
+// record-level consumers get immutable deltas without quadratic prefix storage.
+const checkpoint = findSessionCheckpoint(statsDir, primarySid);
+payload.assistant_usage = scanned.assistantUsage.filter((record) => record.ordinal > checkpoint.maxOrdinal);
+payload.assistant_usage_scope = checkpoint.maxOrdinal ? "since-previous-snapshot" : "primary-session";
+payload.previous_assistant_ordinal = checkpoint.maxOrdinal || null;
+payload.snapshot_ordinal = checkpoint.nextSnapshotOrdinal;
+
 const yyyymmdd = now.toISOString().slice(0, 10);
-const hhmmss = now.toISOString().slice(11, 19).replace(/:/g, "");
-const outPath = join(statsDir, `${yyyymmdd}-${hhmmss}-${ticket}.json`);
+const hhmmssmmm = now.toISOString().slice(11, 23).replace(/[:.]/g, "");
+const outPath = join(statsDir, `${yyyymmdd}-${hhmmssmmm}-${ticket}.json`);
 
 payload.repo = basename(mainWt);
-payload.completed_at = stamp;
 writeFileSync(outPath, JSON.stringify(payload, null, 2) + "\n");
 console.log(`Stats written: ${outPath}`);
 

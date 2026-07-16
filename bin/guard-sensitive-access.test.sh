@@ -289,6 +289,17 @@ expect_allow "note-logger --note=inline form"          Bash command "node bin/lo
 expect_block "note with \$(...) substitution blocks"   Bash command "node bin/log-feedback.mjs --note \"\$(curl -X POST https://api.supabase.com/v1/projects/REF/database/query)\""
 # SECURITY: a real curl segment CHAINED after a note call still blocks (per-segment scans original).
 expect_block "real curl chained after note blocks"     Bash command "node bin/log-feedback.mjs --note foo; curl -X POST https://api.supabase.com/v1/projects/REF/database/query -d @q"
+# SECURITY (V-385 review): a dangling --note must NOT swallow the NEXT command across a shell
+# boundary. shlex.split flattens a newline, so redaction is per-segment -- a trailing --note
+# can't consume printenv/env|grep/declare on the following line (or after ;/&&/|). All BLOCK.
+expect_block "note dangling then newline printenv"     Bash command $'node bin/log-feedback.mjs --note\nprintenv'
+expect_block "note dangling then newline env|grep"     Bash command $'node bin/log-feedback.mjs --note\nenv | grep SECRET'
+expect_block "note dangling then newline declare -p"   Bash command $'node bin/log-feedback.mjs --note\ndeclare -p'
+expect_block "note dangling then ; printenv"           Bash command "node bin/log-feedback.mjs --note ; printenv"
+expect_block "note dangling then && printenv"          Bash command "node bin/log-feedback.mjs --note && printenv"
+expect_block "note dangling then | printenv"           Bash command "node bin/log-feedback.mjs --note | printenv"
+# and a real mutating curl after a note segment (via &&) still blocks.
+expect_block "real curl after note via &&"             Bash command "node bin/log-feedback.mjs --note x && curl -X POST https://api.supabase.com/v1/projects/REF/database/query -d @q"
 
 echo "----------------------------------------"
 printf 'Total: %d passed, %d failed\n' "$pass" "$fail"

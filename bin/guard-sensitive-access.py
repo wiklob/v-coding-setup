@@ -328,34 +328,45 @@ NOTE_FLAGS = ("--note", "--message")
 
 def redact_inert_notes(cmd):
     """Return cmd with any recognized note-logger's inert `--note`/`--message` value removed,
-    for use by the WHOLE-COMMAND scans only. Fails open (returns cmd unchanged) on a shlex
-    parse error, when no note-logger is present, or when a note value carries command
-    substitution (which executes and must still be scanned)."""
-    try:
-        toks = shlex.split(cmd)
-    except ValueError:
-        return cmd
-    if not any(t.split("/")[-1] in NOTE_LOGGERS for t in toks):
-        return cmd
-    out, drop_next = [], False
-    for t in toks:
-        val = None
-        if drop_next:
-            val, drop_next = t, False
-        elif t in NOTE_FLAGS:
-            drop_next = True                      # value is the next token
-            continue
-        else:
-            for f in NOTE_FLAGS:
-                if t.startswith(f + "="):         # --note=<value> form
-                    val = t[len(f) + 1:]
+    for use by the WHOLE-COMMAND scans only. Operates **per shell segment** (split on ; | && ||
+    & and newlines, separators preserved for a perfect round-trip) so a dangling `--note` can
+    never consume a *following* segment's command word: `shlex.split(cmd)` alone flattens a
+    newline (a real command boundary) into whitespace, which let
+    `log-feedback.mjs --note<newline>printenv` drop `printenv` from the scanned copy and slip the
+    whole-command-only DENYs (the V-385 security review). Each segment fails **safe**
+    independently -- an unbalanced-quote segment, or a note value carrying command substitution
+    ($(...) / backticks, which the shell executes), is left verbatim so it is still scanned. A
+    cmd with no note-logger round-trips unchanged."""
+    parts = re.split(r"(\|\||&&|\||;|&|\n)", cmd)   # capture separators -> "".join round-trips
+    for idx in range(0, len(parts), 2):             # even indices = segments, odd = separators
+        try:
+            toks = shlex.split(parts[idx])
+        except ValueError:
+            continue                                # unbalanced quote -> leave segment verbatim
+        if not any(t.split("/")[-1] in NOTE_LOGGERS for t in toks):
+            continue                                # no note-logger in THIS segment
+        out, drop_next, keep_verbatim = [], False, False
+        for t in toks:
+            val = None
+            if drop_next:
+                val, drop_next = t, False           # the value token, still in this segment
+            elif t in NOTE_FLAGS:
+                drop_next = True
+                continue
+            else:
+                for f in NOTE_FLAGS:
+                    if t.startswith(f + "="):        # --note=<value> form
+                        val = t[len(f) + 1:]
+                        break
+            if val is not None:
+                if "$(" in val or "`" in val:
+                    keep_verbatim = True            # substitution executes -> scan seg as-is
                     break
-        if val is not None:
-            if "$(" in val or "`" in val:
-                return cmd                        # substitution executes -> scan original
-            continue                              # inert literal -> drop from scanned copy
-        out.append(t)
-    return " ".join(shlex.quote(x) for x in out)
+                continue                            # inert literal -> drop from scanned copy
+            out.append(t)
+        if not keep_verbatim:
+            parts[idx] = " ".join(shlex.quote(x) for x in out)
+    return "".join(parts)
 
 
 def scan_bash(cmd, depth=0):

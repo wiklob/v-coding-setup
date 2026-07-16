@@ -193,6 +193,10 @@
         "hooks": [{ "type": "command", "command": "python3 ~/.claude/bin/guard-migration-authoring.py" }]
       },
       {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [{ "type": "command", "command": "python3 ~/.claude/bin/guard-workflow-supabase-db.py" }]
+      },
+      {
         "matcher": "Agent|Task",
         "hooks": [{ "type": "command", "command": "python3 ~/.claude/bin/guard-agent-spawn.py" }]
       }

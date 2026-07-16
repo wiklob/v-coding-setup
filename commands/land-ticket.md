@@ -110,12 +110,12 @@ Subagent prompt template (Tier B and Tier C only — substitute `<PR#>`):
 > - Do NOT return raw diff, file contents, exploration narration, or "I read X then Y" commentary — only the final review.
 > - Every finding must cite real `file:line` per the skill's hard rules.
 
-Parent-side handling (Tier B and Tier C):
+Parent-side handling (Tier B and Tier C) — **per convention 14 (subagent output discipline):** ingest the subagent's returned structured review only; never read a raw `.output` transcript back into context. The prompt template above already bounds the *return*; this bounds the *read-back*:
 - Print the review verbatim to the user (it's already terse and structured).
 - Any `critical` or `high` finding → carries into step 5 as a **`needs-eyes`** item requiring specific user acknowledgment at the gate (same treatment as a `needs-eyes` conflict resolution).
 - If the review surfaces a new issue prior steps missed (logic bug, missing acceptance item, boundary violation) — treat as `needs-eyes`. The user can deny the gate, fix the issue, push, and resume `/land-ticket`.
 - Never auto-post `--comment` to Linear — that's the user's call (`/review-pr <PR#> --comment` separately).
-- Multiple PRs in step 1 → spawn the review subagents in parallel (single message, multiple Agent tool calls) unless one PR's review needs to inform another's. Tier each PR independently.
+- Multiple PRs in step 1 → spawn the review subagents in parallel (single message, multiple Agent tool calls) unless one PR's review needs to inform another's. Tier each PR independently. **Cap the parallel batch and consume each compact review as it lands** (convention 14) — on a routed / non-1M model, block-reading many verbose reviews back at once overflows the frame.
 
 ## 4.6 Security review gate (judgment over a deterministic floor)
 A focused security pass that gates the merge on a diff's security risk and costs ~0 on ordinary diffs. Distinct from §4.5's general review: §4.5 is advisory and size-tiered; this gate is security-specialized and **merge-blocking**. Conceptually it sits "after tests, before merge" — tests (`/verify-tests`) ran back in `/build`; this gate's findings feed the §5 confirm gate (MEDIUM/LOW) and the §6.7 merge pause (HIGH). It **reuses** `/security-review` — it never re-implements security analysis here.

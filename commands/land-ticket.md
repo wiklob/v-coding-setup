@@ -469,11 +469,16 @@ Run the helper (one allowlisted Bash call — no inline shell, no jq/sed/find/py
 node ~/.claude/bin/usage-stats.mjs --ticket <TICKET-ID> --pr <PR#>
 ```
 
+The invocation remains valid without billing configuration: freshly priced models are reported as **API-equivalent estimates**, never as actual charges. To identify the billing relationship explicitly, set `V_USAGE_BILLING_MODE=subscription|actual-api|unknown`, pass `--billing-mode <mode>`, or override a mixed session with repeatable `--billing-model <exact-model-id>=<mode>`.
+
 The helper:
 - Binds the **primary** session (whose totals are the headline) by IDENTITY, most-authoritative first: (1) explicit `--session <id>`; (2) the `SessionStart` capture-hook sidecar (`$CLAUDE_JOB_DIR/transcript.json` / `<home>/.claude/run/transcripts/<encoded-cwd>.json`) — harness-authoritative `transcript_path`, rewritten on every resume/compact; (3) id hints — `CLAUDE_CODE_SESSION_ID`, `state.resumeSessionId`, `state.sessionId`; (4) the resolver's **top content-matched** session. Never newest-`.jsonl`-in-dir, never a self-emitted marker.
 - Has **no freshness/staleness gate** — content-match makes recency irrelevant.
 - **Links every other session that mentions the ticket** (via the resolver, content-match) under `related_sessions` — id, dir, mentions, ts — but does **not** sum them into the headline. Content-match over-includes incidental mentions (a single ticket can match dozens of sessions, not the handful that are real), so summing would over-count cost; the file declares `"scope": "primary-session"` and links siblings for audit.
-- Sums token totals + counts tool calls for the primary in one streaming pass, plus per-session monitoring: `compound_bash` (Bash calls stapling steps with ` && `) and `failed_calls` (`tool_result` items flagged `is_error`).
+- Sums token totals + counts tool calls for the primary in one streaming pass, plus per-session monitoring: `compound_bash` and `failed_calls`.
+- Persists every assistant usage record with its stable ordinal, active command, exact `message.model` (nullable), and token/cache categories; aggregates the same records in `usage_by_model` for mixed-model sessions.
+- Prices only exact model IDs present in the sourced catalog. Each applied table carries provider, canonical model, source URL, retrieval/effective dates, currency, and category rates. Unknown/missing models and stale tables stay `unknown/unpriced`—there is no Opus fallback.
+- Reports `actual API estimate`, `API-equivalent estimate`, `subscription usage — no token bill`, and `unknown/unpriced` separately.
 - Writes the stats JSON to `<main worktree>/.claude/usage-stats/<YYYY-MM-DD-HHMMSS>-<TICKET-ID>.json`.
 - Self-heals `.gitignore` to include `.claude/usage-stats/` if missing.
 
@@ -485,6 +490,7 @@ Output JSON shape (so callers know what to expect):
 
 ```json
 {
+  "schema_version": 2,
   "repo": "myapp",
   "ticket": "ABC-107",
   "pr": 52,
@@ -498,6 +504,18 @@ Output JSON shape (so callers know what to expect):
     "input": 1269, "output": 81767,
     "cache_read": 9359349, "cache_create": 337050,
     "assistant_msg_count": 132
+  },
+  "assistant_usage": [
+    { "ordinal": 1, "timestamp": "...", "command": "go", "model_id": "gpt-5.6-sol",
+      "usage": { "input": 10, "output": 20, "cache_read": 30, "cache_create": 4 } }
+  ],
+  "usage_by_model": {
+    "gpt-5.6-sol": { "model_id": "gpt-5.6-sol", "totals": { "input": 10, "output": 20, "cache_read": 30, "cache_create": 4, "assistant_msg_count": 1 } }
+  },
+  "billing_context": { "default_mode": "unknown", "model_overrides": {}, "source": "default" },
+  "accounting": {
+    "currency": "USD",
+    "models": [{ "observed_model": "gpt-5.6-sol", "canonical_model": "gpt-5.6-sol", "provider": "openai", "classification": "API-equivalent estimate", "estimate_usd": 0.001 }]
   },
   "tool_calls": {
     "Bash": 23, "Edit": 18, "Read": 15, "Write": 4,

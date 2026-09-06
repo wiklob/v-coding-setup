@@ -33,21 +33,27 @@ fi
 pass=0
 fail=0
 
-# Build a PreToolUse event JSON from (tool, key, value) without quoting hell.
+# Build a PreToolUse event JSON from (tool, key, value [, cwd]) without quoting hell.
+# The optional 4th arg populates the event's `cwd`; omitted -> no `cwd` key at all, exactly
+# as a client that doesn't send one. (V-667 resolves a relative tool path against it.)
 emit() {
-  python3 -c 'import json,sys; print(json.dumps({"tool_name":sys.argv[1],"tool_input":{sys.argv[2]:sys.argv[3]}}))' "$1" "$2" "$3"
+  python3 -c 'import json,sys
+e = {"tool_name": sys.argv[1], "tool_input": {sys.argv[2]: sys.argv[3]}}
+if len(sys.argv) > 4 and sys.argv[4]:
+    e["cwd"] = sys.argv[4]
+print(json.dumps(e))' "$1" "$2" "$3" ${4:+"$4"}
 }
 
 # Run the guard against an event; echo its exit code.
 guard_rc() {
-  emit "$1" "$2" "$3" | python3 "$GUARD" >/dev/null 2>&1
+  emit "$1" "$2" "$3" ${4:+"$4"} | python3 "$GUARD" >/dev/null 2>&1
   echo $?
 }
 
-# expect_block <label> <tool> <key> <value>
+# expect_block <label> <tool> <key> <value> [cwd]
 expect_block() {
   local label="$1" rc
-  rc="$(guard_rc "$2" "$3" "$4")"
+  rc="$(guard_rc "$2" "$3" "$4" ${5:+"$5"})"
   if [ "$rc" = "2" ]; then
     pass=$((pass+1)); printf 'ok   BLOCK  %s\n' "$label"
   else
@@ -55,10 +61,10 @@ expect_block() {
   fi
 }
 
-# expect_allow <label> <tool> <key> <value>
+# expect_allow <label> <tool> <key> <value> [cwd]
 expect_allow() {
   local label="$1" rc
-  rc="$(guard_rc "$2" "$3" "$4")"
+  rc="$(guard_rc "$2" "$3" "$4" ${5:+"$5"})"
   if [ "$rc" = "0" ]; then
     pass=$((pass+1)); printf 'ok   ALLOW  %s\n' "$label"
   else
@@ -66,11 +72,11 @@ expect_allow() {
   fi
 }
 
-# expect_ask <label> <tool> <key> <value>  (V-63: ask() exits 0 AND emits ask-JSON on
+# expect_ask <label> <tool> <key> <value> [cwd]  (V-63: ask() exits 0 AND emits ask-JSON on
 # stdout, so exit-code alone can't tell ask from allow -- must inspect stdout.)
 expect_ask() {
   local label="$1" out rc
-  out="$(emit "$2" "$3" "$4" | python3 "$GUARD" 2>/dev/null)"; rc=$?
+  out="$(emit "$2" "$3" "$4" ${5:+"$5"} | python3 "$GUARD" 2>/dev/null)"; rc=$?
   if [ "$rc" = "0" ] && printf '%s' "$out" | grep -q '"permissionDecision":[[:space:]]*"ask"'; then
     pass=$((pass+1)); printf 'ok   ASK    %s\n' "$label"
   else
@@ -154,12 +160,29 @@ expect_block "--permission-mode bypassPermissions"   Bash command "claude --perm
 expect_block "bypass flag buried in crontab (V-52)"  Bash command "(crontab -l; echo claude --dangerously-skip-permissions) | crontab -"
 
 echo
-echo "== V-63: settings.json permission edits MUST ask; other edits allowed =="
-expect_ask   "Edit settings.json"                    Edit file_path "settings.json"
+echo "== V-63: INSTALLED settings.json permission edits MUST ask; other edits allowed =="
+expect_ask   "Edit settings.json (no cwd -> fail safe)" Edit file_path "settings.json"
 expect_ask   "Edit abs settings.json"                Edit file_path "/Users/testuser/.claude/settings.json"
 expect_ask   "Write settings.local.json"             Write file_path ".claude/settings.local.json"
 expect_allow "Edit ordinary package.json"            Edit file_path "package.json"
 expect_allow "Edit a source file"                    Edit file_path "bin/usage-stats.mjs"
+
+echo
+echo "== V-667: the gate is the INSTALLED settings file, not every file named settings.json =="
+# The live user-level file and a project's loaded .claude/settings*.json still gate...
+expect_ask   "live ~/.claude/settings.json"          Edit file_path "/Users/testuser/.claude/settings.json"
+expect_ask   "live ~/.claude/settings.local.json"    Edit file_path "/Users/testuser/.claude/settings.local.json"
+expect_ask   "project .claude/settings.json (abs)"   Write file_path "/Users/testuser/projects/app/.claude/settings.json"
+expect_ask   "tilde ~/.claude/settings.json"         Edit file_path "~/.claude/settings.json"
+expect_ask   "relative settings.json, cwd=~/.claude" Edit file_path "settings.json" "/Users/testuser/.claude"
+expect_ask   "dotted path back into .claude"         Edit file_path "/Users/testuser/.claude/bin/../settings.json"
+# ...but a settings.json at a TICKET WORKTREE's root is a PR artifact -> no prompt.
+# (This was the ~25h freeze: three V-652 background stages stuck on this exact path.)
+expect_allow "worktree-root settings.json (V-652)"   Edit file_path "/Users/testuser/projects/v-coding-setup-wt-v-652/settings.json"
+expect_allow "worktree-root settings.local.json"     Write file_path "/Users/testuser/projects/v-coding-setup-wt-v-652/settings.local.json"
+expect_allow "repo-source settings.json"             Edit file_path "/Users/testuser/projects/v-coding-setup/settings.json"
+expect_allow "relative settings.json, cwd=worktree"  Edit file_path "settings.json" "/Users/testuser/projects/v-coding-setup-wt-v-652"
+expect_allow "settings.example.json (template)"      Edit file_path "/Users/testuser/.claude/settings.example.json"
 
 echo
 echo "== V-63 (sec-review LOW 4): secret-file WRITES MUST block =="

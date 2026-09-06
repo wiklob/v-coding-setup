@@ -57,7 +57,7 @@ Safety: FAILS OPEN. Any parse/logic error -> exit 0 (allow). It is defense-in-de
 layered on permissions.deny/ask, never the sole control, so a bug here must not be able to
 brick Bash/Read globally. Only a *confirmed* match exits 2 (block) or emits ask-JSON.
 """
-import sys, json, re, shlex
+import sys, json, os, re, shlex
 
 
 def allow():
@@ -179,7 +179,23 @@ SYSTEMCTL_WRITE = {"enable", "disable", "start", "stop", "restart", "reload",
                    "try-restart", "reload-or-restart", "mask", "unmask",
                    "daemon-reload", "daemon-reexec", "set-default", "isolate",
                    "kill", "edit", "link", "preset", "set-property"}
-SETTINGS_PATH = re.compile(r"settings(?:\.local)?\.json$", re.IGNORECASE)
+# V-63/V-667: which `settings.json` is a live-system mutation?
+# The gate's purpose (docs/plans/v-63-build.md) is to catch permission-WIDENING edits to the
+# harness's own permission set. That purpose is served entirely by the settings file the
+# harness actually LOADS -- one living directly inside a `.claude/` directory: the user-level
+# `~/.claude/settings.json` and a project's `<repo>/.claude/settings{,.local}.json`.
+#
+# A `settings.json` at the ROOT of a ticket worktree is NOT that file. (This pipeline's own
+# repo *is* the `.claude` dir, so every checkout of it carries a `settings.json` at its root.)
+# That copy is a PR artifact: it changes nothing until the branch merges, and /land-ticket's
+# review gates -- including bin/sensitive-diff-scan's `settings*.json` HIGH rating -- read it
+# on the way. Gating it bought no security and cost frozen background sessions: V-667 measured
+# ~25h of dead time across three V-652 stages, all stuck on one unanswerable prompt for a
+# worktree-local settings edit. Keep the gate ABSOLUTE for the installed path; do not re-widen
+# this to "any file named settings.json".
+SETTINGS_FILE = re.compile(r"settings(?:\.local)?\.json$", re.IGNORECASE)
+INSTALLED_SETTINGS_PATH = re.compile(
+    r"(?:^|/)\.claude/settings(?:\.local)?\.json$", re.IGNORECASE)
 # V-36: env-dumping producers that surface all credential values (regardless of pipe
 # adjacency / a wrapping subshell). `printenv` alone dumps; `declare -p`/`typeset -p`
 # print every variable WITH values; `(env) | grep` and `(set) | grep` dodge the old
@@ -215,6 +231,25 @@ def is_relative(path):
     can silently redirect onto the wrong file (the V-332 vector). An absolute '/...' path
     is cwd-immune, so an explicit absolute worktree-symlink op stays allowed."""
     return not path.startswith("/")
+
+
+def is_installed_settings(fp, cwd=None):
+    """V-667: True only for the settings file the harness LOADS -- one sitting directly inside
+    a `.claude/` directory (`~/.claude/settings.json`, `<repo>/.claude/settings.local.json`).
+    A `settings.json` at a ticket worktree's root is a PR artifact, not live config, so it is
+    NOT gated.
+
+    A relative path is resolved against the hook event's `cwd` so `settings.json` typed from
+    ~/.claude is still recognized. With no cwd to resolve against we cannot prove the path is
+    a worktree artifact, so we FAIL SAFE and gate it (keep the block when in doubt)."""
+    if not fp or not SETTINGS_FILE.search(fp):
+        return False
+    p = os.path.expanduser(fp)
+    if not os.path.isabs(p):
+        if not cwd:
+            return True                      # unresolvable -> fail safe, keep the gate
+        p = os.path.join(cwd, p)
+    return bool(INSTALLED_SETTINGS_PATH.search(os.path.normpath(p)))
 
 
 def secret_in(text):
@@ -574,6 +609,7 @@ def run():
     event = json.loads(raw) if raw.strip() else {}
     tool = event.get("tool_name", "")
     ti = event.get("tool_input", {}) or {}
+    cwd = str(event.get("cwd", "") or "")
 
     # Read tool: block secret files regardless of location (closes the ~/.claude allow hole).
     if tool == "Read":
@@ -585,17 +621,21 @@ def run():
                   "secrets. Use `node ~/.claude/bin/transcript-resolver.mjs read ...` (redacts).")
         allow()
 
-    # V-63: editing a Claude Code settings.json is a live-system mutation -> ask; and mirror
-    # the Read secret-file block for writes to secret paths / transcripts.
+    # V-63: editing the INSTALLED Claude Code settings.json is a live-system mutation -> ask;
+    # a worktree-local copy is a PR artifact and is not gated (V-667 -- see
+    # is_installed_settings). Mirror the Read secret-file block for writes to secret paths /
+    # transcripts.
     if tool in ("Edit", "Write", "MultiEdit"):
         fp = str(ti.get("file_path", "") or ti.get("path", ""))
         if fp and secret_in(fp):
             block("write to a secret file (" + fp + ").")
         if fp and TRANSCRIPT_PATH.search(fp):
             block("write to a raw session transcript (" + fp + ").")
-        if fp and SETTINGS_PATH.search(fp):
-            ask("edit to a Claude Code settings.json -- the harness permission set "
-                "(permissions/allow/deny) lives here. Confirm before changing it.")
+        if is_installed_settings(fp, cwd):
+            ask("edit to an INSTALLED Claude Code settings.json (" + fp + ") -- the live "
+                "harness permission set (permissions/allow/deny) lives here. Confirm before "
+                "changing it. (A settings.json at a worktree root is a PR artifact and is "
+                "not gated -- V-667.)")
         allow()
 
     if tool != "Bash":

@@ -57,7 +57,7 @@ check(
 );
 check(
   "collapses absolute paths to a placeholder",
-  normalizeError("failed at /Users/wiklob/.claude/bin/foo.mjs") === "failed at <PATH>",
+  normalizeError("failed at /Users/someone/.claude/bin/foo.mjs") === "failed at <PATH>",
 );
 check(
   "collapses ISO timestamps",
@@ -118,7 +118,7 @@ const a1 = {
   conversation: "c1",
   ts: "2026-08-02T07:07:42.122Z",
   input: { command: "python3 -c ..." },
-  error: "Exit code 1\nfailed at /Users/wiklob/.claude/bin/foo.mjs:20:5 on branch flingelms30/v-429-fix",
+  error: "Exit code 1\nfailed at /Users/someone/.claude/bin/foo.mjs:20:5 on branch flingelms30/v-429-fix",
 };
 const a2 = {
   tool: "Bash",
@@ -128,7 +128,7 @@ const a2 = {
   conversation: "c2",
   ts: "2026-08-03T09:00:00.000Z",
   input: { command: "python3 -c ..." },
-  error: "Exit code 1\nfailed at /Users/wiklob/other/path/bar.mjs:99:1 on branch someone/other-fix",
+  error: "Exit code 1\nfailed at /Users/someone/other/path/bar.mjs:99:1 on branch someone/other-fix",
 };
 check(
   "acceptance: path/ts/loc/branch-only variance yields the same normalized text",
@@ -180,12 +180,12 @@ const entries = [
   {
     tool: "Grep",
     activeCommand: "plan",
-    origin: "cbapp",
+    origin: "myapp",
     session: "s3",
     conversation: null,
     ts: "2026-08-04T00:00:00.000Z",
     input: { command: "rg foo" },
-    error: "Exit code 1\nfailed at /Users/wiklob/x/y.mjs:1:1 on branch other/branch-name",
+    error: "Exit code 1\nfailed at /Users/someone/x/y.mjs:1:1 on branch other/branch-name",
   },
   {
     tool: "manual",
@@ -215,7 +215,7 @@ check(
   "activeCommand is evidence, not a divider — one cluster, two commands",
   hookCluster.activeCommands.includes("harvest-pipeline-bugs") && hookCluster.activeCommands.includes("plan"),
 );
-check("origins collected distinct", hookCluster.origins.includes(".claude") && hookCluster.origins.includes("cbapp"));
+check("origins collected distinct", hookCluster.origins.includes(".claude") && hookCluster.origins.includes("myapp"));
 check("ts is a parallel per-entry list, one per occurrence", hookCluster.ts.length === 3);
 check("sessions is a parallel per-entry list", hookCluster.sessions.length === 3);
 check("conversations is a parallel per-entry list (nulls kept)", hookCluster.conversations.length === 3);

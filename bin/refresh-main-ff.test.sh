@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ~/.claude/bin/refresh-main-ff.test.sh
 # Encoded proof for refresh-main-ff.sh's drift-preservation invariants (V-334,
-# V-658). Builds isolated scratch repos (bare "origin" + a working clone) and
-# asserts, against real git:
+# V-658, V-356). Builds isolated scratch repos (bare "origin" + a working
+# clone) and asserts, against real git:
 #
 #   - a clean checkout just fast-forwards (no drift involved).
 #   - PERMANENT drift on a file the incoming range never touches survives
@@ -11,6 +11,12 @@
 #     differs) on a file the incoming range DOES modify is discarded, not
 #     restored — the working tree ends up equal to the new HEAD's blob
 #     (V-658: this used to silently revert the landed content).
+#   - CONTENT drift on a file the incoming range modifies elsewhere in the
+#     same file is merged, not overwritten — the result contains BOTH the
+#     incoming committed change and the local drift (V-356).
+#   - a genuine overlapping conflict (drift and the incoming range touch the
+#     same lines) is surfaced loudly — conflict markers in the file and a
+#     CONFLICT line in the output — never silently resolved either way.
 #
 # Usage:  bash ~/.claude/bin/refresh-main-ff.test.sh   (exit 0 = all pass)
 
@@ -87,6 +93,31 @@ WBLOB3="$(git -C "$M3" hash-object f.txt)"
 HBLOB3="$(git -C "$M3" rev-parse "$NEWHEAD3:f.txt")"
 [ "$(git -C "$M3" rev-parse HEAD)" = "$NEWHEAD3" ] && ok "mode-only: fast-forwarded" || bad "mode-only: did not reach new HEAD: $OUT"
 [ "$WBLOB3" = "$HBLOB3" ] && ok "mode-only: working tree equals new HEAD blob (landed content NOT reverted)" || bad "mode-only: working tree diverged from new HEAD blob — V-658 regression! output: $OUT"
+
+# ---------- 4. CONTENT drift that does NOT overlap the incoming change merges (V-356) ----------
+M4="$(build_world merge)"
+printf 'line1-local-drift\nline2\nline3\n' > "$M4/f.txt"   # local edit to line1 only
+set_line3_v3() { printf 'line1\nline2\nline3-incoming\n' > f.txt; git add f.txt; git commit -qm incoming; }
+advance merge set_line3_v3
+OUT="$(bash "$HELPER" "$M4" main 2>&1)"
+NEWHEAD4="$(git -C "$SCRATCH/merge/origin.git" rev-parse main)"
+[ "$(git -C "$M4" rev-parse HEAD)" = "$NEWHEAD4" ] && ok "merge: fast-forwarded" || bad "merge: did not reach new HEAD: $OUT"
+grep -q "line1-local-drift" "$M4/f.txt" && ok "merge: local drift survived" || bad "merge: local drift was clobbered! (V-356 regression)"
+grep -q "line3-incoming" "$M4/f.txt" && ok "merge: incoming committed change survived" || bad "merge: incoming change was reverted! (V-356 regression)"
+echo "$OUT" | grep -qi "conflict" && bad "merge: reported a conflict on a non-overlapping change: $OUT" || ok "merge: no false conflict reported"
+
+# ---------- 5. Genuine OVERLAPPING conflict surfaces loudly, never silently resolved ----------
+M5="$(build_world conflict)"
+printf 'line1\nline2-local\nline3\n' > "$M5/f.txt"   # local edit to line2
+set_line2_remote() { printf 'line1\nline2-remote\nline3\n' > f.txt; git add f.txt; git commit -qm remote; }
+advance conflict set_line2_remote
+OUT="$(bash "$HELPER" "$M5" main 2>&1)"
+NEWHEAD5="$(git -C "$SCRATCH/conflict/origin.git" rev-parse main)"
+[ "$(git -C "$M5" rev-parse HEAD)" = "$NEWHEAD5" ] && ok "conflict: still fast-forwarded (ref advances)" || bad "conflict: did not reach new HEAD: $OUT"
+echo "$OUT" | grep -qi "conflict" && ok "conflict: reported loudly" || bad "conflict: went silent — output: $OUT"
+grep -q '<<<<<<<' "$M5/f.txt" && ok "conflict: markers left in place (nothing silently dropped)" || bad "conflict: no conflict markers found — a side was silently resolved!"
+grep -q "line2-local" "$M5/f.txt" && ok "conflict: local side preserved in markers" || bad "conflict: local side vanished!"
+grep -q "line2-remote" "$M5/f.txt" && ok "conflict: incoming side preserved in markers" || bad "conflict: incoming side vanished!"
 
 echo "== $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ]

@@ -41,12 +41,24 @@
 # preserved verbatim"). Fix: partition drift first — a file whose working
 # blob hash equals HEAD's blob hash (mode-only) is reset to HEAD *before* the
 # ff is attempted, so the incoming commit's mode+content simply wins. Only
-# genuine CONTENT drift still goes through the stash/restore path below.
+# genuine CONTENT drift still goes through the reconciliation path below.
+#
+# V-356 (2026-09): the *genuine* content-drift case had its own bug — the
+# whole-file overwrite-restore, applied when the incoming ff ALSO modified
+# that file, discarded the incoming committed change in the live working
+# tree (it survived in git history, but the on-disk file the harness reads
+# lost it — e.g. a landed settings.json hook silently disappearing). Fix:
+# reconcile with a real three-way merge instead (`git merge-file`: base =
+# the pre-ff HEAD blob, theirs = the incoming ff'd blob, ours = the drifted
+# working copy) — so the incoming committed change and the local drift both
+# survive when they don't overlap. A genuine overlapping conflict is left as
+# visible `<<<<<<<` markers and reported loudly; nothing is ever silently
+# resolved either way.
 #
 # Degrades safely: a clean checkout just fast-forwards; if ff is blocked by
 # something other than unstaged drift (staged change, unrelated state) the
-# stash is restored and the original surface-and-continue note is emitted
-# (exit 0 — teardown still completes; main simply not advanced, as before).
+# original state is restored and the pre-V-334 surface-and-continue note is
+# emitted (exit 0 — teardown still completes; main simply not advanced).
 
 set -u
 
@@ -114,25 +126,65 @@ if [ "${#content_drift[@]}" -eq 0 ]; then
 fi
 
 extra=""
-[ "${#mode_only[@]}" -gt 0 ] && extra=" (also discarded mode-only drift on ${#mode_only[@]} file(s): ${mode_only[*]})"
+[ "${#mode_only[@]}" -gt 0 ] && extra="; discarded mode-only drift on ${#mode_only[@]} file(s): ${mode_only[*]}"
+
+# Save each content-drift file's pre-ff HEAD blob (base) and the drifted
+# working copy (ours) — both sides of the 3-way merge below — before the
+# stash clears them so ff-only can proceed.
+tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/refresh-main-ff.XXXXXX")" || {
+  echo "refresh-main-ff: could not create scratch dir — leaving main un-advanced (drift untouched). Continuing teardown."
+  exit 0
+}
+trap 'rm -rf "$tmpdir"' EXIT
+
+for f in "${content_drift[@]}"; do
+  mkdir -p "$tmpdir/base/$(dirname "$f")" "$tmpdir/ours/$(dirname "$f")"
+  g show "HEAD:$f" > "$tmpdir/base/$f" 2>/dev/null
+  cp "$main/$f" "$tmpdir/ours/$f"
+done
 
 g stash push -q -m "land-teardown(V-334): preserve local drift across ff" -- "${content_drift[@]}" || {
   echo "refresh-main-ff: could not stash local drift — leaving main un-advanced (drift untouched). Continuing teardown."
   exit 0
 }
 
-if g merge --ff-only "origin/$base" 2>/dev/null; then
-  # Restore each drifted file VERBATIM from the stash (overwrite, no 3-way
-  # merge — cannot conflict or corrupt), then drop the stash.
-  g checkout "stash@{0}" -- "${content_drift[@]}"
-  g restore --staged "${content_drift[@]}" 2>/dev/null || true
-  g stash drop -q
-  echo "refresh-main-ff: fast-forwarded local $base in $main (local drift on ${#content_drift[@]} file(s) preserved verbatim: ${content_drift[*]})$extra"
+if ! g merge --ff-only "origin/$base" 2>/dev/null; then
+  # ff still blocked after stashing the unstaged drift — a different
+  # obstacle. Restore the drift and fall back to the pre-V-334
+  # surface-and-continue.
+  g stash pop -q 2>/dev/null || true
+  echo "refresh-main-ff: fetched origin/$base (tip current); local $base NOT fast-forwarded — collision persists after stashing drift; drift restored untouched. Resolve manually, then 'git -C \"$main\" merge --ff-only origin/$base'. Continuing teardown."
   exit 0
 fi
 
-# ff still blocked after stashing the unstaged drift — a different obstacle.
-# Restore the drift and fall back to the pre-V-334 surface-and-continue.
-g stash pop -q 2>/dev/null || true
-echo "refresh-main-ff: fetched origin/$base (tip current); local $base NOT fast-forwarded — collision persists after stashing drift; drift restored untouched. Resolve manually, then 'git -C \"$main\" merge --ff-only origin/$base'. Continuing teardown."
+# ff landed. Reconcile each content-drift file with a real 3-way merge
+# (base = pre-ff HEAD, theirs = incoming ff'd content, ours = the drifted
+# copy) instead of a whole-file overwrite (V-356) — so the incoming
+# committed change and the local drift both survive when they don't
+# overlap. The stash already did its job (letting ff-only proceed); we have
+# everything we need in $tmpdir, so it is dropped, never popped.
+conflicts=()
+merged=()
+for f in "${content_drift[@]}"; do
+  work="$main/$f"
+  theirs="$tmpdir/theirs/$f"
+  mkdir -p "$(dirname "$theirs")"
+  cp "$work" "$theirs"           # incoming content, just checked out by the ff
+  cp "$tmpdir/ours/$f" "$work"   # start from the drifted local copy
+  if git merge-file -L "local drift" -L "base ($base pre-ff)" -L "incoming $base" \
+       "$work" "$tmpdir/base/$f" "$theirs" >/dev/null 2>&1; then
+    merged+=("$f")
+  else
+    conflicts+=("$f")
+  fi
+done
+
+g stash drop -q 2>/dev/null || true
+
+if [ "${#conflicts[@]}" -gt 0 ]; then
+  echo "refresh-main-ff: fast-forwarded local $base in $main — CONFLICT merging local drift into the incoming change on ${#conflicts[@]} file(s): ${conflicts[*]} (conflict markers left in place; resolve by hand). Drift merged cleanly on ${#merged[@]} other file(s)$extra."
+  exit 0
+fi
+
+echo "refresh-main-ff: fast-forwarded local $base in $main (local drift merged onto the incoming change on ${#merged[@]} file(s): ${merged[*]})$extra"
 exit 0

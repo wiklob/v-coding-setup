@@ -291,6 +291,17 @@ For an ack gate: `needs input: [HARD STOP] <decision required> — <what the hum
 
 Skills that gate (`/land-ticket` §5 + §6.7, `/scope`, `/build`, `/go`) render every confirm gate this way; `AskUserQuestion` stays in the planning skills' discrete-fork role.
 
+### Prod-datastore writes are a confirm gate — permission before, never cleanup after (V-440)
+
+**Any create / update / delete against a production datastore requires an explicit confirm before the write.** Production datastore means the live database, bucket, index, queue or SaaS record set that real users and other systems read — whatever the write travels through: a migration, a CLI, an MCP client, an app helper, a script, or a hand-run query. The gate is convention 11's ordinary confirm gate, rendered the same way; what this clause adds is that a prod write is *always* one of them, not a judgment call the agent makes per case.
+
+- **Test fixtures are covered, with no exception for "I'll delete them right after."** Creating two throwaway accounts to exercise a path, then removing them, is still two prod writes. The window between create and delete is live state: other readers see it, replication and backups capture it, and downstream systems may email, bill, or index it. And if the cleanup fails — a crashed session, a partial delete, a constraint that blocks it — the fabricated rows survive silently, with nobody watching for them.
+- **Verified cleanup does not retroactively supply the missing permission.** Confirming afterwards that the rows are gone answers a *different* question (is there residue?) than the one the gate asks (should this have run at all?). A clean after-state is not consent; reporting the cleanup is not the same as having asked.
+- **The honest alternatives, in preference order** — reach for one of these instead of asking for a prod write you don't actually need: (1) a **local or staging datastore** (the repo's local Supabase / dev DB / test container); (2) a **seeded fixture** in that non-prod store, which is also reproducible for the next run; (3) a **read-only probe** against prod, when the question is genuinely "what does prod contain?" — reads are not gated by this clause. Only when none of the three can answer the question does a prod write become the right ask, and then it goes through the gate with the reason stated.
+- **Gate the write, not the session.** Render it as convention 11 prescribes — state the datastore, the operation, and the rows/objects affected — so the approver can see the blast radius: `needs input: create 2 user rows in the production database to exercise <path> — local/staging cannot reproduce <reason>; rows will be deleted after the run. Reply to proceed, or name a non-prod alternative.`
+
+This is a stated rule rather than another command-shape pattern because the write can arrive through any client; a settings-level ask/deny rule can only catch the shapes it recognises, and complements this rather than replacing it.
+
 ---
 
 ## 12. Model profile — read-first posture layer

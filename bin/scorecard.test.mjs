@@ -8,9 +8,11 @@
 // as ONE gate (a split would have hidden that §6.7 was intervened once).
 
 import { readJsonl, buildSessionTicketMap, parseGateAudit, sessionFindingsFor } from "./scorecard.mjs";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
 
 let fails = 0;
 function check(name, cond) {
@@ -124,6 +126,37 @@ function check(name, cond) {
   const map = new Map([["sConflict", "V-999"]]); // session maps to a DIFFERENT ticket
   check("lens-(a): a ticket-stamped row joins its own ticket", sessionFindingsFor("V-234", rows, map).count === 1);
   check("lens-(a): a ticket-stamped row does NOT also join the session-map's ticket (no double-attribution)", sessionFindingsFor("V-999", rows, map).count === 0);
+}
+
+// --- V-447: costTickets covers a foreign-repo land under the now-global usage-stats
+// sink (V-681) — buildAggregate never filters loadUsageStats() by `repo`, so a stats
+// file whose `repo` field names a different repo than the one scorecard.mjs is
+// invoked from must still roll into costTickets. Exercised end-to-end (a real `--cwd`
+// worktree + `--aggregate --json` subprocess), not by calling buildAggregate directly,
+// since it isn't exported and this is the exact surface /periodic-review depends on. ---
+{
+  const dir = mkdtempSync(join(tmpdir(), "scorecard-foreign-repo-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: dir });
+    const statsDir = join(dir, ".claude", "usage-stats");
+    mkdirSync(statsDir, { recursive: true });
+    // Written as if by a land in an unrelated repo ("cbapp") — V-681 makes
+    // usage-stats.mjs resolve to this same global dir regardless of that repo's
+    // own cwd, so its `repo` field is the ONLY trace of where the land happened.
+    writeFileSync(
+      join(statsDir, "20260101-000000-V-500.json"),
+      JSON.stringify({ ticket: "V-500", repo: "cbapp", totals: { output: 12345 } }) + "\n"
+    );
+
+    const here = dirname(fileURLToPath(import.meta.url));
+    const out = execFileSync("node", [join(here, "scorecard.mjs"), "--aggregate", "--json"], { cwd: dir, encoding: "utf8" });
+    const ag = JSON.parse(out);
+    const row = ag.costTickets.find(([t]) => t === "V-500");
+    check("costTickets includes a foreign-repo (`repo`:\"cbapp\") land from the global sink", !!row);
+    check("its output-token total is read correctly regardless of `repo`", row?.[1] === 12345);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 console.log(`\n${fails === 0 ? "ALL PASS" : fails + " FAILED"}`);

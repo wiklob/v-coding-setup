@@ -344,6 +344,42 @@ expect_block "note <(curl db query) proc-subst"        Bash command "node bin/lo
 expect_block "note backtick cmd-subst"                 Bash command "node bin/log-feedback.mjs --note \`curl -X POST https://api.supabase.com/v1/projects/REF/database/query\`"
 
 echo
+echo "== V-593: DESCRIBING an incident is not PERFORMING one (the explicit report path) =="
+# The asymmetry: the guard let V-587 dump four live credentials (via a shell prefix) but
+# blocked the human writing down that it happened. A note is argv to a JSONL appender.
+expect_allow "note describes cat .envrc"               Bash command "node ~/.claude/bin/log-feedback.mjs --note \"the guard let a session cat .envrc into the transcript\""
+expect_allow "note describes printenv"                 Bash command "node ~/.claude/bin/log-feedback.mjs --note \"a session ran printenv and leaked four credentials\""
+expect_allow "note describes env | grep (quoted pipe)" Bash command "node ~/.claude/bin/log-feedback.mjs --note \"env | grep TOKEN dumped everything\""
+expect_allow "note names a transcript jsonl"           Bash command "node ~/.claude/bin/log-feedback.mjs --note \"someone read ~/.claude/projects/x/abc.jsonl raw\""
+expect_allow "note quotes a bypass flag"               Bash command "node ~/.claude/bin/log-feedback.mjs --note \"it ran claude --dangerously-skip-permissions\""
+expect_allow "note with --subject too"                 Bash command "node ~/.claude/bin/log-feedback.mjs --note \"cat .envrc leaked\" --subject report-feedback"
+expect_allow "note=inline form describing a leak"      Bash command "node ~/.claude/bin/log-feedback.mjs --note=\"printenv leaked \$GITHUB_TOKEN\""
+# /report-bug's sibling logger takes the free text as --error; same report path.
+expect_allow "report-bug --error describes a leak"     Bash command "node ~/.claude/bin/log-pipeline-error.mjs --command report-bug --error \"cat .envrc leaked into the transcript\""
+expect_allow "log-input-request --message"             Bash command "node ~/.claude/bin/log-input-request.mjs --type permission_prompt --message \"asked before printenv\""
+
+echo
+echo "== V-593: the denial set MUST NOT shrink -- every bypass shape still denies =="
+# 1. the real acts, unchanged.
+expect_block "real cat .envrc still denied"            Bash command "cat .envrc"
+expect_block "real printenv still denied"              Bash command "printenv"
+expect_block "real env | grep still denied"            Bash command "env | grep TOKEN"
+# 2. an unquoted shell boundary means a SECOND command -> proof fails, full scan applies.
+expect_block "logger then newline printenv"            Bash command $'node bin/log-feedback.mjs --note\nprintenv'
+expect_block "logger then ; printenv"                  Bash command "node bin/log-feedback.mjs --note x ; printenv"
+expect_block "logger then && cat .envrc"               Bash command "node bin/log-feedback.mjs --note x && cat .envrc"
+expect_block "logger then | printenv"                  Bash command "node bin/log-feedback.mjs --note x | printenv"
+expect_block "logger redirecting over .envrc"          Bash command "node bin/log-feedback.mjs --note x > .envrc"
+# 3. substitution executes while forming the argument -> proof fails.
+expect_block "note \$(...) substitution"               Bash command "node bin/log-feedback.mjs --note \"\$(cat .envrc)\""
+expect_block "note backtick substitution"              Bash command "node bin/log-feedback.mjs --note \"\`printenv\`\""
+expect_block "note <(...) proc-subst"                  Bash command "node bin/log-feedback.mjs --note <(printenv>/tmp/leak)"
+# 4. the logger must be the program, not a mention -- no eval-mode smuggle, no lookalike.
+expect_block "node -e smuggle naming the logger"       Bash command "node -e \"require('fs').readFileSync('.envrc')\" log-feedback.mjs"
+expect_block "cat piped into the logger"               Bash command "cat .envrc | node bin/log-feedback.mjs --note x"
+expect_block "logger name only inside a note value"    Bash command "cat .envrc --note \"log-feedback.mjs\""
+
+echo
 echo "== V-594: \`crontab -l\` is a secret-bearing read -> DENY; the redacting verb passes =="
 # It dumps the crontab verbatim, and a crontab carries credentials inline (this leaked a live
 # gmail password into a transcript, 2026-08-27). A hook cannot filter output, so ask would

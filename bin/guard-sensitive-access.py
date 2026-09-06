@@ -389,8 +389,82 @@ def expand_assignments(cmd):
 # on the original cmd (they are verb-keyed: the note segment's verb is `node`, not an HTTP
 # client, so they never fire on it). A value carrying command substitution ($(...) / backticks)
 # IS executed by the shell, so it is left in place to be scanned -- never redacted.
-NOTE_LOGGERS = {"log-feedback.mjs", "log-input-request.mjs"}
-NOTE_FLAGS = ("--note", "--message")
+NOTE_LOGGERS = {"log-feedback.mjs", "log-input-request.mjs", "log-pipeline-error.mjs"}
+NOTE_FLAGS = ("--note", "--message", "--error")
+
+
+# --- V-593: the explicit REPORT PATH -- describing an act is not performing it ---
+# The asymmetry this closes: on 2026-08-27 the guard did NOT stop a session dumping four live
+# credentials into a transcript (V-587 went around it via a shell prefix), but it DID stop the
+# human writing down that it happened -- the /report-feedback note's prose matched the command
+# patterns. Security tooling more effective against the incident report than against the
+# incident inverts its own purpose, and it compounds: the harder reporting is, the fewer leaks
+# get recorded, the less evidence the guard's own tuning has.
+#
+# Mechanism (the acceptance asks for one, not a widened pattern): recognize the WHOLE COMMAND
+# as an inert logger invocation. Not a keyword exemption -- a structural proof that nothing in
+# the command can execute except the logger itself:
+#   1. no shell metacharacter OUTSIDE quotes  -> one command, no chain/pipe/redirect/newline;
+#   2. no `$(`, backtick, `<(`, `>(` ANYWHERE -> nothing the shell runs while forming an
+#      argument (these execute even inside double quotes);
+#   3. the program is a runtime whose FIRST argument is a known logger script (the is_resolver
+#      rule) -> `node -e '<exfil>' log-feedback.mjs` earns nothing.
+# Under all three, every quoted body is argv to a JSONL appender -- data being WRITTEN, never
+# a command being RUN -- so its text is not scanned. Break any one and the command falls
+# through to the full scan unchanged: `--note<newline>printenv`, `--note x && curl …`,
+# `--note "$(…)"` and `--note "…" > .envrc` all still deny (the V-385 review's bypass set).
+#
+# Applied at two levels: to the whole command (the pure report call), and per segment, so a
+# report chained with other work still exempts only its own segment while every other segment
+# scans normally.
+#
+# This does NOT generalize to V-488 (session-review.mjs Lens A reading sensitivity keywords out
+# of rg patterns and PR-body prose). Same root shape -- prose matched as action -- but Lens A
+# classifies arbitrary argument text with no invocation to prove inert; it needs its own
+# argument-position rule, not this one.
+UNQUOTED_META = re.compile(r"[;|&<>(){}\n$`]")
+SUBST_MARKERS = ("$(", "`", "<(", ">(")
+
+
+def strip_quoted(text):
+    """Return `text` with every quoted region blanked out, so what remains is the command's
+    unquoted skeleton. An unbalanced quote returns None (unparseable -> caller fails safe)."""
+    out, i, n = [], 0, len(text)
+    while i < n:
+        c = text[i]
+        if c in ("'", '"'):
+            j = text.find(c, i + 1)
+            if j == -1:
+                return None                  # unbalanced quote
+            out.append(" " * (j - i + 1))
+            i = j + 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def is_pure_note_log(text):
+    """True when `text` is provably a single, non-substituting invocation of a known
+    note/report logger -- i.e. its quoted argument bodies are inert DATA, not commands.
+    See the V-593 block above for why each condition is load-bearing."""
+    if not text or not any(lg in text for lg in NOTE_LOGGERS):
+        return False
+    if any(m in text for m in SUBST_MARKERS):
+        return False                         # executes while forming an argument
+    skeleton = strip_quoted(text)
+    if skeleton is None or UNQUOTED_META.search(skeleton):
+        return False                         # not a single self-contained command
+    try:
+        toks = shlex.split(text)
+    except ValueError:
+        return False
+    i = 0
+    while i < len(toks) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", toks[i]):
+        i += 1                               # leading VAR=val assignments
+    return (i + 1 < len(toks)
+            and toks[i].split("/")[-1] in RESOLVER_RUNTIMES
+            and toks[i + 1].split("/")[-1] in NOTE_LOGGERS)
 
 
 def redact_inert_notes(cmd):
@@ -447,6 +521,12 @@ def scan_bash(cmd, depth=0):
     across the whole command + all segments (+ recursively through shell-opener payloads),
     then resolves DENY-before-ASK. depth-bounded so a pathological nest can't loop."""
     blocks, asks = [], []
+    # V-593: the explicit report path. A command proven to be a single, non-substituting
+    # invocation of a note/report logger writes DATA to a JSONL sink -- describing an incident
+    # is not performing one, and reporting a leak must never be harder than causing it. Every
+    # bypass shape fails the proof and falls through to the full scan below.
+    if is_pure_note_log(cmd):
+        return None, None
     segs = [s.strip() for s in segments(cmd) if s.strip()]
     # V-385: the whole-command scans below run against a copy with any inert note-logger
     # `--note`/`--message` value redacted, so a command *quoted inside* a feedback note is not
@@ -491,6 +571,11 @@ def scan_bash(cmd, depth=0):
     for s in segs:
         verb, toks, i = verb_of(s)
         if verb is None:
+            continue
+
+        # V-593: a report call CHAINED with other work exempts only its own segment; every
+        # other segment scans normally, so `<report> && curl …` still blocks on the curl.
+        if is_pure_note_log(s):
             continue
 
         # Shell-runner wrapper: re-scan the -c payload (V-358).

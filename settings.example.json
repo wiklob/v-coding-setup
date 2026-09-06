@@ -189,6 +189,10 @@
         "hooks": [{ "type": "command", "command": "python3 ~/.claude/bin/guard-repo-cd.py" }]
       },
       {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "python3 ~/.claude/bin/guard-grep.py" }]
+      },
+      {
         "matcher": "Write|Edit|MultiEdit",
         "hooks": [{ "type": "command", "command": "python3 ~/.claude/bin/guard-migration-authoring.py" }]
       },

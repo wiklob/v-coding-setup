@@ -145,8 +145,8 @@ expect_ask   "systemctl --user start"                Bash command "systemctl --u
 
 echo
 echo "== V-63: read forms + ordinary commands MUST stay allowed (zero friction) =="
-expect_allow "crontab -l (list)"                     Bash command "crontab -l"
-expect_allow "crontab -u bob -l (list other user)"   Bash command "crontab -u bob -l"
+# NOTE: `crontab -l` was asserted ALLOW here until V-594 reclassified it as a
+# secret-bearing read; its assertions now live in the V-594 section below, as BLOCKs.
 expect_allow "systemctl status"                      Bash command "systemctl status myapp-worker"
 expect_allow "systemctl is-enabled"                  Bash command "systemctl is-enabled myapp-worker"
 expect_allow "launchctl list"                        Bash command "launchctl list"
@@ -342,6 +342,26 @@ expect_block "note=<(printenv) inline proc-subst"      Bash command "node bin/lo
 expect_block "note >(printenv) output proc-subst"      Bash command "node bin/log-feedback.mjs --note >(printenv)"
 expect_block "note <(curl db query) proc-subst"        Bash command "node bin/log-feedback.mjs --note <(curl -X POST https://api.supabase.com/v1/projects/REF/database/query)"
 expect_block "note backtick cmd-subst"                 Bash command "node bin/log-feedback.mjs --note \`curl -X POST https://api.supabase.com/v1/projects/REF/database/query\`"
+
+echo
+echo "== V-594: \`crontab -l\` is a secret-bearing read -> DENY; the redacting verb passes =="
+# It dumps the crontab verbatim, and a crontab carries credentials inline (this leaked a live
+# gmail password into a transcript, 2026-08-27). A hook cannot filter output, so ask would
+# still leak on approval -- only deny keeps the value off the transcript.
+expect_block "crontab -l (verbatim dump)"              Bash command "crontab -l"
+expect_block "crontab -u bob -l (other user)"          Bash command "crontab -u bob -l"
+expect_block "crontab -l piped to a reader"            Bash command "crontab -l | grep MAILTO"
+expect_block "crontab -l mid-chain"                    Bash command "cd /tmp && crontab -l > /tmp/jobs"
+expect_block "crontab -l inside bash -c"               Bash command "bash -c 'crontab -l'"
+expect_block "crontab -l behind env"                   Bash command "env FOO=1 crontab -l"
+# The sanctioned redacting reader (allow the VERB, not the source -- as transcript-resolver).
+expect_allow "crontab-redacted.mjs (redacting verb)"   Bash command "node ~/.claude/bin/crontab-redacted.mjs"
+expect_allow "crontab-redacted.mjs -u bob"             Bash command "node ~/.claude/bin/crontab-redacted.mjs -u bob"
+# The denial set does not shrink: every write form still asks, the V-52 bypass still denies.
+expect_ask   "crontab - still asks (write)"            Bash command "crontab -"
+expect_ask   "crontab -e still asks (write)"           Bash command "crontab -e"
+expect_ask   "crontab -r still asks (write)"           Bash command "crontab -r"
+expect_ask   "crontab -u bob -e still asks"            Bash command "crontab -u bob -e"
 
 echo "----------------------------------------"
 printf 'Total: %d passed, %d failed\n' "$pass" "$fail"

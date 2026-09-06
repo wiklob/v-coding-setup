@@ -214,6 +214,38 @@ def first_subcommand(toks, i):
     return None
 
 
+REDIRECT = re.compile(r"(?:\d*>>?|&>>?|>\||<)\s*\S+")
+
+
+def crontab_form(seg):
+    """Classify a `crontab ...` segment as 'list' (a read-only dump) or 'write'.
+    `-u <user>` is transparent (it only picks whose crontab). Redirections are stripped
+    first, so `crontab -l > /tmp/jobs` reads as the LIST it is -- verb_of() drops the bare
+    operator but not its target, which would otherwise look like the stray positional that
+    means "install this file" (V-594). A genuine positional (`crontab /tmp/jobs`) still
+    classifies as a write, and any form without `-l` does too, so the fallback is safe."""
+    toks = REDIRECT.sub(" ", seg).split()
+    rest = []
+    for j, t in enumerate(toks):
+        if t.split("/")[-1] == "crontab":
+            rest = toks[j + 1:]
+            break
+    positional, has_l, has_write_flag, j = [], False, False, 0
+    while j < len(rest):
+        t = rest[j]
+        if t == "-u":
+            j += 2
+            continue
+        if t == "-l":
+            has_l = True
+        elif t in ("-e", "-r", "-"):
+            has_write_flag = True
+        elif not t.startswith("-"):
+            positional.append(t)
+        j += 1
+    return "list" if (has_l and not has_write_flag and not positional) else "write"
+
+
 def is_cred_var(name):
     n = name.upper()
     if re.search(r"(SECRET|TOKEN|PASSWORD|PASSWD|BEARER|DSN|CREDENTIAL)", n):
@@ -538,6 +570,31 @@ def scan_bash(cmd, depth=0):
                 if is_cred_var(m.group(1)):
                     blocks.append("echoing a credential variable ($" + m.group(1) + ").")
 
+        # V-594: `crontab -l` is a SECRET-BEARING READ, not a neutral listing. It prints the
+        # crontab verbatim, and a crontab routinely carries a credential inline -- an env
+        # assignment line (MAILTO=/PASS=), a `--password` on a job command, a URL userinfo.
+        # On 2026-08-27 that dumped a live gmail password into a session transcript (the
+        # second credential-to-transcript leak that day, after V-587, by a different route).
+        # A hook decides allow/deny; it cannot filter a command's OUTPUT -- so an `ask` would
+        # still leak on approval, and the only decision that keeps the value off the
+        # transcript is DENY. Same treatment, and the same escape hatch, as the raw
+        # transcript JSONLs above: deny the raw read, allowlist a redacting verb
+        # (`node ~/.claude/bin/crontab-redacted.mjs`), per V-4 "allow the verb, not the dir".
+        #
+        # On enumeration vs. generic detection (V-594 acceptance): a PreToolUse hook sees the
+        # COMMAND, never its output, so "detect secret-bearing output" is not available to
+        # this layer at all -- there is nothing to inspect at decision time. The general rule
+        # it can apply is narrower but still principled: deny any verb that dumps a
+        # user-controlled config store verbatim, and pair each with a redacting reader.
+        # `crontab` is the third member of that set (env dumps, transcript JSONLs, crontab);
+        # adding the next one is a two-line change, not a redesign.
+        if verb == "crontab" and crontab_form(s) == "list":
+            blocks.append("`crontab -l` dumps the crontab verbatim into the transcript, and a "
+                          "crontab can carry a credential inline (env line / job flag / URL "
+                          "userinfo) -- this leaked a live password once already (V-594). Use "
+                          "`node ~/.claude/bin/crontab-redacted.mjs [-u <user>]`, which emits "
+                          "the same schedule with every value masked.")
+
         # V-27 Hole 1 (deny half): raw SQL to the Management-API database/query endpoint.
         if verb in HTTP_CLIENTS and MGMT_DB_QUERY.search(s):
             blocks.append("raw SQL to the Supabase Management API database/query endpoint "
@@ -571,25 +628,9 @@ def scan_bash(cmd, depth=0):
             asks.append("write to the Supabase Management API (prod config mutation). "
                         "Confirm before it runs. (Read-only GET log/analytics endpoints are allowed.)")
 
-        if verb == "crontab":
-            rest = toks[i + 1:]
-            positional, has_l, has_write_flag, j = [], False, False, 0
-            while j < len(rest):
-                t = rest[j]
-                if t == "-u":
-                    j += 2
-                    continue
-                if t == "-l":
-                    has_l = True
-                elif t in ("-e", "-r", "-"):
-                    has_write_flag = True
-                elif not t.startswith("-"):
-                    positional.append(t)
-                j += 1
-            read_only = has_l and not has_write_flag and not positional
-            if not read_only:
-                asks.append("`crontab` write (install/edit/remove a cron job) -- a post-merge "
-                            "'activation' action outside the PR diff. Confirm it.")
+        if verb == "crontab" and crontab_form(s) == "write":
+            asks.append("`crontab` write (install/edit/remove a cron job) -- a post-merge "
+                        "'activation' action outside the PR diff. Confirm it.")
         if verb == "launchctl" and first_subcommand(toks, i) in LAUNCHCTL_WRITE:
             asks.append("`launchctl " + str(first_subcommand(toks, i)) + "` mutates launchd "
                         "(load/enable a job). Confirm this live-system activation.")

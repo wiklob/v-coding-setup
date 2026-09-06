@@ -82,6 +82,19 @@ if (!repo) {
 // deleted, not that the commits reached base — so a non-namespace branch is never force-deleted.
 const NS = "flingelms30/";
 
+// Runtime cruft that re-dirties main every session (V-583) — gitignorable, so a
+// dirty path matching one of these is noise, not stranded content. Used only to
+// split the dirty-main report below into cruft vs content; never changes what
+// gets skipped.
+const CRUFT_PATTERNS = [
+  /^pipeline\/audit\/.*\.log$/,
+  /\.session-sweep-/,
+  /\.telemetry-digest-/,
+  /(^|\/)\.push-watermark$/,
+  /^pipeline\/retired-launchd\//,
+];
+const isCruftPath = (p) => CRUFT_PATTERNS.some((re) => re.test(p));
+
 // ---- git plumbing (each call surfaces its own failure; a failing step never aborts the sweep) ----
 function git(dir, args, { allowFail = false } = {}) {
   try {
@@ -130,12 +143,32 @@ log(`=== git-hygiene [${MODE}] repo=${repo} base=${base} ===`);
 try {
   const cur = tryGit(mainWt, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
   git(mainWt, ["fetch", "origin", base]);
-  const mainStatus = tryGit(mainWt, ["status", "--porcelain"]);
+  // --untracked-files=all: without it git collapses an untracked directory to
+  // one "?? dir/" line, which would hide e.g. "pipeline/audit/x.log" behind
+  // "pipeline/" and defeat the cruft/content classification below.
+  const mainStatus = tryGit(mainWt, ["status", "--porcelain", "--untracked-files=all"]);
   if (cur !== base) {
     log(`FF: skipped — main worktree is on '${cur || "(detached)"}', not '${base}'; not switching under a hygiene sweep.`);
+  } else if (mainStatus === null) {
+    log(`FF: skipped — main worktree status could not be determined; not fast-forwarding.`);
   } else if (mainStatus !== "") {
-    // non-empty = dirty; null = status couldn't be determined → fail safe, don't FF a tree we can't confirm clean.
-    log(`FF: skipped — main worktree ${mainStatus === null ? "status could not be determined" : "has uncommitted changes"}; not fast-forwarding.`);
+    // Dirty main used to skip silently (V-583) — the daily auto-FF then never
+    // fires against the shared checkout (it's essentially always dirty), and
+    // drift accumulates unnoticed until real work strands on no branch. Report
+    // loudly: how far behind, how many paths, and split cruft (gitignorable
+    // noise) from content (tracked-modified / untracked-but-real) so the
+    // reader can tell "needs a gitignore line" from "work is stranded".
+    const behind = tryGit(mainWt, ["rev-list", "--count", `HEAD..origin/${base}`]);
+    const lines = mainStatus.split("\n").filter(Boolean);
+    let cruft = 0, content = 0;
+    for (const l of lines) {
+      if (isCruftPath(l.slice(3))) cruft++; else content++;
+    }
+    log(
+      `FF: SKIPPED — dirty '${base}' in ${mainWt}: ${lines.length} dirty path(s) (${cruft} cruft, ${content} content), ` +
+      `${behind ?? "?"} commit(s) behind origin/${base}. Local ${base} NOT fast-forwarded; resolve the dirty paths ` +
+      `(commit, stash, or gitignore the cruft), then re-run.`
+    );
   } else {
     const before = tryGit(mainWt, ["rev-parse", "HEAD"]);
     const target = tryGit(mainWt, ["rev-parse", `origin/${base}`]);

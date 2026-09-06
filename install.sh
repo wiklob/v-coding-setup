@@ -113,7 +113,9 @@ say "  1. PATH for the bare-verb helpers (pr-health, sb-new, conflict-scan, …)
 say '       case ":$PATH:" in *":$HOME/.claude/bin:"*) ;; *) export PATH="$HOME/.claude/bin:$PATH" ;; esac'
 say "     (zprofile, not zshrc — Claude Code's shell is login, non-interactive. New sessions only.)"
 say ""
-say "  2. Linear MCP — hosted (OAuth):  claude mcp add --transport http linear https://mcp.linear.app/mcp"
+say "  2. Linear MCP — hosted (OAuth):  claude mcp add --transport http linear https://mcp.linear.app/mcp --scope user"
+say "     (--scope user, not the default 'local': the scheduled harvest runners cd to $TARGET before"
+say "     invoking claude, so a local-scoped add made from a different directory is invisible to them.)"
 say "     or self-hosted token-frugal wrapper: github.com/wiklob/linear-mcp-lean, then"
 say "     export LINEAR_MCP_WRAPPER_URL=<your endpoint> and manage routing via bin/linear-wrapper-toggle.mjs."
 say ""

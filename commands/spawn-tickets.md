@@ -39,7 +39,7 @@ Read the plan's `Shape:` field (default `slices` if absent — backward-compatib
 
 ### Shape: slices (default)
 For each Manifest part → one Linear issue:
-- **Title**: the part's intent, imperative, concise.
+- **Title**: the part's intent, imperative, concise. Never a bare foreign ticket ID (`V-123`) — it auto-links (convention 3).
 - **Description**: the part detail + a `## Acceptance` checklist copied/derived from the part (convention 3 — verifiable items only).
 - **Labels**: `<scopeLabel>` (so `/next-ticket` can find it) + the part's **`route:<x>`** label (exactly one; default `route:build` per §0 — Initiative II's consumer reads it).
 - **Dependencies**: map plan part-order/blockers to `blockedBy`.
@@ -47,7 +47,7 @@ For each Manifest part → one Linear issue:
 
 ### Shape: procedure
 The entire Manifest collapses to **ONE Linear issue**:
-- **Title**: imperative summary of the procedure (derived from the plan's title or `## Goal` first sentence). One ticket, no per-part splitting.
+- **Title**: imperative summary of the procedure (derived from the plan's title or `## Goal` first sentence). One ticket, no per-part splitting. Never a bare foreign ticket ID (convention 3).
 - **Description**: the plan's `## Goal` paragraph + a `## Acceptance` checklist whose items are the Manifest parts verbatim. **Preserve P-numbering as a prefix** so the build session can track which step they're on: e.g. `- [ ] P1. <part text>` … `- [ ] P<n>. <part text>`.
 - **Labels**: `<scopeLabel>`.
 - **Dependencies**: none (single issue, no blockers possible).

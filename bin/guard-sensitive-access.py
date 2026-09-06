@@ -57,7 +57,7 @@ Safety: FAILS OPEN. Any parse/logic error -> exit 0 (allow). It is defense-in-de
 layered on permissions.deny/ask, never the sole control, so a bug here must not be able to
 brick Bash/Read globally. Only a *confirmed* match exits 2 (block) or emits ask-JSON.
 """
-import sys, json, re, shlex
+import sys, json, os, re, shlex
 
 
 def allow():
@@ -179,7 +179,23 @@ SYSTEMCTL_WRITE = {"enable", "disable", "start", "stop", "restart", "reload",
                    "try-restart", "reload-or-restart", "mask", "unmask",
                    "daemon-reload", "daemon-reexec", "set-default", "isolate",
                    "kill", "edit", "link", "preset", "set-property"}
-SETTINGS_PATH = re.compile(r"settings(?:\.local)?\.json$", re.IGNORECASE)
+# V-63/V-667: which `settings.json` is a live-system mutation?
+# The gate's purpose (docs/plans/v-63-build.md) is to catch permission-WIDENING edits to the
+# harness's own permission set. That purpose is served entirely by the settings file the
+# harness actually LOADS -- one living directly inside a `.claude/` directory: the user-level
+# `~/.claude/settings.json` and a project's `<repo>/.claude/settings{,.local}.json`.
+#
+# A `settings.json` at the ROOT of a ticket worktree is NOT that file. (This pipeline's own
+# repo *is* the `.claude` dir, so every checkout of it carries a `settings.json` at its root.)
+# That copy is a PR artifact: it changes nothing until the branch merges, and /land-ticket's
+# review gates -- including bin/sensitive-diff-scan's `settings*.json` HIGH rating -- read it
+# on the way. Gating it bought no security and cost frozen background sessions: V-667 measured
+# ~25h of dead time across three V-652 stages, all stuck on one unanswerable prompt for a
+# worktree-local settings edit. Keep the gate ABSOLUTE for the installed path; do not re-widen
+# this to "any file named settings.json".
+SETTINGS_FILE = re.compile(r"settings(?:\.local)?\.json$", re.IGNORECASE)
+INSTALLED_SETTINGS_PATH = re.compile(
+    r"(?:^|/)\.claude/settings(?:\.local)?\.json$", re.IGNORECASE)
 # V-36: env-dumping producers that surface all credential values (regardless of pipe
 # adjacency / a wrapping subshell). `printenv` alone dumps; `declare -p`/`typeset -p`
 # print every variable WITH values; `(env) | grep` and `(set) | grep` dodge the old
@@ -196,6 +212,38 @@ def first_subcommand(toks, i):
         if not t.startswith("-"):
             return t
     return None
+
+
+REDIRECT = re.compile(r"(?:\d*>>?|&>>?|>\||<)\s*\S+")
+
+
+def crontab_form(seg):
+    """Classify a `crontab ...` segment as 'list' (a read-only dump) or 'write'.
+    `-u <user>` is transparent (it only picks whose crontab). Redirections are stripped
+    first, so `crontab -l > /tmp/jobs` reads as the LIST it is -- verb_of() drops the bare
+    operator but not its target, which would otherwise look like the stray positional that
+    means "install this file" (V-594). A genuine positional (`crontab /tmp/jobs`) still
+    classifies as a write, and any form without `-l` does too, so the fallback is safe."""
+    toks = REDIRECT.sub(" ", seg).split()
+    rest = []
+    for j, t in enumerate(toks):
+        if t.split("/")[-1] == "crontab":
+            rest = toks[j + 1:]
+            break
+    positional, has_l, has_write_flag, j = [], False, False, 0
+    while j < len(rest):
+        t = rest[j]
+        if t == "-u":
+            j += 2
+            continue
+        if t == "-l":
+            has_l = True
+        elif t in ("-e", "-r", "-"):
+            has_write_flag = True
+        elif not t.startswith("-"):
+            positional.append(t)
+        j += 1
+    return "list" if (has_l and not has_write_flag and not positional) else "write"
 
 
 def is_cred_var(name):
@@ -215,6 +263,25 @@ def is_relative(path):
     can silently redirect onto the wrong file (the V-332 vector). An absolute '/...' path
     is cwd-immune, so an explicit absolute worktree-symlink op stays allowed."""
     return not path.startswith("/")
+
+
+def is_installed_settings(fp, cwd=None):
+    """V-667: True only for the settings file the harness LOADS -- one sitting directly inside
+    a `.claude/` directory (`~/.claude/settings.json`, `<repo>/.claude/settings.local.json`).
+    A `settings.json` at a ticket worktree's root is a PR artifact, not live config, so it is
+    NOT gated.
+
+    A relative path is resolved against the hook event's `cwd` so `settings.json` typed from
+    ~/.claude is still recognized. With no cwd to resolve against we cannot prove the path is
+    a worktree artifact, so we FAIL SAFE and gate it (keep the block when in doubt)."""
+    if not fp or not SETTINGS_FILE.search(fp):
+        return False
+    p = os.path.expanduser(fp)
+    if not os.path.isabs(p):
+        if not cwd:
+            return True                      # unresolvable -> fail safe, keep the gate
+        p = os.path.join(cwd, p)
+    return bool(INSTALLED_SETTINGS_PATH.search(os.path.normpath(p)))
 
 
 def secret_in(text):
@@ -322,8 +389,82 @@ def expand_assignments(cmd):
 # on the original cmd (they are verb-keyed: the note segment's verb is `node`, not an HTTP
 # client, so they never fire on it). A value carrying command substitution ($(...) / backticks)
 # IS executed by the shell, so it is left in place to be scanned -- never redacted.
-NOTE_LOGGERS = {"log-feedback.mjs", "log-input-request.mjs"}
-NOTE_FLAGS = ("--note", "--message")
+NOTE_LOGGERS = {"log-feedback.mjs", "log-input-request.mjs", "log-pipeline-error.mjs"}
+NOTE_FLAGS = ("--note", "--message", "--error")
+
+
+# --- V-593: the explicit REPORT PATH -- describing an act is not performing it ---
+# The asymmetry this closes: on 2026-08-27 the guard did NOT stop a session dumping four live
+# credentials into a transcript (V-587 went around it via a shell prefix), but it DID stop the
+# human writing down that it happened -- the /report-feedback note's prose matched the command
+# patterns. Security tooling more effective against the incident report than against the
+# incident inverts its own purpose, and it compounds: the harder reporting is, the fewer leaks
+# get recorded, the less evidence the guard's own tuning has.
+#
+# Mechanism (the acceptance asks for one, not a widened pattern): recognize the WHOLE COMMAND
+# as an inert logger invocation. Not a keyword exemption -- a structural proof that nothing in
+# the command can execute except the logger itself:
+#   1. no shell metacharacter OUTSIDE quotes  -> one command, no chain/pipe/redirect/newline;
+#   2. no `$(`, backtick, `<(`, `>(` ANYWHERE -> nothing the shell runs while forming an
+#      argument (these execute even inside double quotes);
+#   3. the program is a runtime whose FIRST argument is a known logger script (the is_resolver
+#      rule) -> `node -e '<exfil>' log-feedback.mjs` earns nothing.
+# Under all three, every quoted body is argv to a JSONL appender -- data being WRITTEN, never
+# a command being RUN -- so its text is not scanned. Break any one and the command falls
+# through to the full scan unchanged: `--note<newline>printenv`, `--note x && curl …`,
+# `--note "$(…)"` and `--note "…" > .envrc` all still deny (the V-385 review's bypass set).
+#
+# Applied at two levels: to the whole command (the pure report call), and per segment, so a
+# report chained with other work still exempts only its own segment while every other segment
+# scans normally.
+#
+# This does NOT generalize to V-488 (session-review.mjs Lens A reading sensitivity keywords out
+# of rg patterns and PR-body prose). Same root shape -- prose matched as action -- but Lens A
+# classifies arbitrary argument text with no invocation to prove inert; it needs its own
+# argument-position rule, not this one.
+UNQUOTED_META = re.compile(r"[;|&<>(){}\n$`]")
+SUBST_MARKERS = ("$(", "`", "<(", ">(")
+
+
+def strip_quoted(text):
+    """Return `text` with every quoted region blanked out, so what remains is the command's
+    unquoted skeleton. An unbalanced quote returns None (unparseable -> caller fails safe)."""
+    out, i, n = [], 0, len(text)
+    while i < n:
+        c = text[i]
+        if c in ("'", '"'):
+            j = text.find(c, i + 1)
+            if j == -1:
+                return None                  # unbalanced quote
+            out.append(" " * (j - i + 1))
+            i = j + 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def is_pure_note_log(text):
+    """True when `text` is provably a single, non-substituting invocation of a known
+    note/report logger -- i.e. its quoted argument bodies are inert DATA, not commands.
+    See the V-593 block above for why each condition is load-bearing."""
+    if not text or not any(lg in text for lg in NOTE_LOGGERS):
+        return False
+    if any(m in text for m in SUBST_MARKERS):
+        return False                         # executes while forming an argument
+    skeleton = strip_quoted(text)
+    if skeleton is None or UNQUOTED_META.search(skeleton):
+        return False                         # not a single self-contained command
+    try:
+        toks = shlex.split(text)
+    except ValueError:
+        return False
+    i = 0
+    while i < len(toks) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", toks[i]):
+        i += 1                               # leading VAR=val assignments
+    return (i + 1 < len(toks)
+            and toks[i].split("/")[-1] in RESOLVER_RUNTIMES
+            and toks[i + 1].split("/")[-1] in NOTE_LOGGERS)
 
 
 def redact_inert_notes(cmd):
@@ -380,6 +521,12 @@ def scan_bash(cmd, depth=0):
     across the whole command + all segments (+ recursively through shell-opener payloads),
     then resolves DENY-before-ASK. depth-bounded so a pathological nest can't loop."""
     blocks, asks = [], []
+    # V-593: the explicit report path. A command proven to be a single, non-substituting
+    # invocation of a note/report logger writes DATA to a JSONL sink -- describing an incident
+    # is not performing one, and reporting a leak must never be harder than causing it. Every
+    # bypass shape fails the proof and falls through to the full scan below.
+    if is_pure_note_log(cmd):
+        return None, None
     segs = [s.strip() for s in segments(cmd) if s.strip()]
     # V-385: the whole-command scans below run against a copy with any inert note-logger
     # `--note`/`--message` value redacted, so a command *quoted inside* a feedback note is not
@@ -424,6 +571,11 @@ def scan_bash(cmd, depth=0):
     for s in segs:
         verb, toks, i = verb_of(s)
         if verb is None:
+            continue
+
+        # V-593: a report call CHAINED with other work exempts only its own segment; every
+        # other segment scans normally, so `<report> && curl …` still blocks on the curl.
+        if is_pure_note_log(s):
             continue
 
         # Shell-runner wrapper: re-scan the -c payload (V-358).
@@ -503,6 +655,31 @@ def scan_bash(cmd, depth=0):
                 if is_cred_var(m.group(1)):
                     blocks.append("echoing a credential variable ($" + m.group(1) + ").")
 
+        # V-594: `crontab -l` is a SECRET-BEARING READ, not a neutral listing. It prints the
+        # crontab verbatim, and a crontab routinely carries a credential inline -- an env
+        # assignment line (MAILTO=/PASS=), a `--password` on a job command, a URL userinfo.
+        # On 2026-08-27 that dumped a live gmail password into a session transcript (the
+        # second credential-to-transcript leak that day, after V-587, by a different route).
+        # A hook decides allow/deny; it cannot filter a command's OUTPUT -- so an `ask` would
+        # still leak on approval, and the only decision that keeps the value off the
+        # transcript is DENY. Same treatment, and the same escape hatch, as the raw
+        # transcript JSONLs above: deny the raw read, allowlist a redacting verb
+        # (`node ~/.claude/bin/crontab-redacted.mjs`), per V-4 "allow the verb, not the dir".
+        #
+        # On enumeration vs. generic detection (V-594 acceptance): a PreToolUse hook sees the
+        # COMMAND, never its output, so "detect secret-bearing output" is not available to
+        # this layer at all -- there is nothing to inspect at decision time. The general rule
+        # it can apply is narrower but still principled: deny any verb that dumps a
+        # user-controlled config store verbatim, and pair each with a redacting reader.
+        # `crontab` is the third member of that set (env dumps, transcript JSONLs, crontab);
+        # adding the next one is a two-line change, not a redesign.
+        if verb == "crontab" and crontab_form(s) == "list":
+            blocks.append("`crontab -l` dumps the crontab verbatim into the transcript, and a "
+                          "crontab can carry a credential inline (env line / job flag / URL "
+                          "userinfo) -- this leaked a live password once already (V-594). Use "
+                          "`node ~/.claude/bin/crontab-redacted.mjs [-u <user>]`, which emits "
+                          "the same schedule with every value masked.")
+
         # V-27 Hole 1 (deny half): raw SQL to the Management-API database/query endpoint.
         if verb in HTTP_CLIENTS and MGMT_DB_QUERY.search(s):
             blocks.append("raw SQL to the Supabase Management API database/query endpoint "
@@ -536,25 +713,9 @@ def scan_bash(cmd, depth=0):
             asks.append("write to the Supabase Management API (prod config mutation). "
                         "Confirm before it runs. (Read-only GET log/analytics endpoints are allowed.)")
 
-        if verb == "crontab":
-            rest = toks[i + 1:]
-            positional, has_l, has_write_flag, j = [], False, False, 0
-            while j < len(rest):
-                t = rest[j]
-                if t == "-u":
-                    j += 2
-                    continue
-                if t == "-l":
-                    has_l = True
-                elif t in ("-e", "-r", "-"):
-                    has_write_flag = True
-                elif not t.startswith("-"):
-                    positional.append(t)
-                j += 1
-            read_only = has_l and not has_write_flag and not positional
-            if not read_only:
-                asks.append("`crontab` write (install/edit/remove a cron job) -- a post-merge "
-                            "'activation' action outside the PR diff. Confirm it.")
+        if verb == "crontab" and crontab_form(s) == "write":
+            asks.append("`crontab` write (install/edit/remove a cron job) -- a post-merge "
+                        "'activation' action outside the PR diff. Confirm it.")
         if verb == "launchctl" and first_subcommand(toks, i) in LAUNCHCTL_WRITE:
             asks.append("`launchctl " + str(first_subcommand(toks, i)) + "` mutates launchd "
                         "(load/enable a job). Confirm this live-system activation.")
@@ -574,6 +735,7 @@ def run():
     event = json.loads(raw) if raw.strip() else {}
     tool = event.get("tool_name", "")
     ti = event.get("tool_input", {}) or {}
+    cwd = str(event.get("cwd", "") or "")
 
     # Read tool: block secret files regardless of location (closes the ~/.claude allow hole).
     if tool == "Read":
@@ -585,17 +747,21 @@ def run():
                   "secrets. Use `node ~/.claude/bin/transcript-resolver.mjs read ...` (redacts).")
         allow()
 
-    # V-63: editing a Claude Code settings.json is a live-system mutation -> ask; and mirror
-    # the Read secret-file block for writes to secret paths / transcripts.
+    # V-63: editing the INSTALLED Claude Code settings.json is a live-system mutation -> ask;
+    # a worktree-local copy is a PR artifact and is not gated (V-667 -- see
+    # is_installed_settings). Mirror the Read secret-file block for writes to secret paths /
+    # transcripts.
     if tool in ("Edit", "Write", "MultiEdit"):
         fp = str(ti.get("file_path", "") or ti.get("path", ""))
         if fp and secret_in(fp):
             block("write to a secret file (" + fp + ").")
         if fp and TRANSCRIPT_PATH.search(fp):
             block("write to a raw session transcript (" + fp + ").")
-        if fp and SETTINGS_PATH.search(fp):
-            ask("edit to a Claude Code settings.json -- the harness permission set "
-                "(permissions/allow/deny) lives here. Confirm before changing it.")
+        if is_installed_settings(fp, cwd):
+            ask("edit to an INSTALLED Claude Code settings.json (" + fp + ") -- the live "
+                "harness permission set (permissions/allow/deny) lives here. Confirm before "
+                "changing it. (A settings.json at a worktree root is a PR artifact and is "
+                "not gated -- V-667.)")
         allow()
 
     if tool != "Bash":

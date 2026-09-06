@@ -23,6 +23,31 @@ set -u
 
 wt="${1:?usage: worktree-remove.sh <worktree-path>}"
 
+# Regenerable build artefacts that routinely make `git worktree remove` refuse
+# with "Directory not empty" even though there is no real work to lose (V-527:
+# 33 of 34 accumulated myapp worktrees carried nothing but leftover .next/
+# output). Extend this list as new build tools land regenerable output under a
+# worktree root — never widen the removal itself to a blanket `git clean -fdx`.
+REGENERABLE_ARTEFACTS="
+.next
+.turbo
+node_modules/.cache
+dist
+build
+coverage
+"
+
+if [ -d "$wt" ]; then
+  for artefact in $REGENERABLE_ARTEFACTS; do
+    [ -e "$wt/$artefact" ] || continue
+    # -X removes ONLY paths git already ignores for this worktree — never a
+    # tracked file, never an untracked-but-not-ignored file. A worktree with a
+    # real uncommitted change (tracked or untracked-and-not-ignored) is
+    # untouched here and still makes the removal below refuse, unchanged.
+    git -C "$wt" clean -fdX -- "$artefact" >/dev/null 2>&1 || true
+  done
+fi
+
 # `--` stops option parsing for arbitrary paths, including historical legacy
 # sibling names that began with a dash (V-36). Managed worktree names do not rely
 # on that legacy shape, but teardown stays defensive during migration.

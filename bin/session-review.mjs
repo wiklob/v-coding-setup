@@ -198,8 +198,25 @@ const READ_SIGS =
 const SENSITIVE_RE =
   /(git\s+push\s+--force|--force-with-lease|\brm\s+-rf\b|supabase\s+db\s+push|sb-push\s+[^\n]*--apply|sb-mgmt\s+(PATCH|POST|PUT|DELETE)|\bprintenv\b|env\s*\||cat\s+[^\n|]*\.env|\.env[^\n]*\|\s*cat|>\s*\.env|\bcurl\b[^\n]*(-d|--data|-X\s*(POST|PUT|PATCH|DELETE)))/i;
 
+// V-488: SENSITIVE_RE scans the raw sample text, so a sensitive-looking keyword
+// sitting inert inside a PR/commit body or heredoc (e.g. `gh pr create --body
+// "$(cat <<'EOF' ... this PR runs supabase db push in CI ... EOF)"`) reads as if
+// the command itself executed that action. Redact non-executable message/note
+// payloads before the sensitivity test — mirrors the redact_inert_notes()
+// precedent in guard-sensitive-access.py. Heuristic and deliberately bounded to
+// the two evidenced shapes: heredoc-idiom bodies and simple quoted flag values.
+const HEREDOC_RE = /<<-?\s*['"]?(\w+)['"]?[^\n]*\n[\s\S]*?\n\s*\1\b/g;
+const MESSAGE_FLAG_RE =
+  /(--body|--body-file|--message|-m|-F)(\s+)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\S+)/g;
+
+function stripMessagePayloads(cmd) {
+  return cmd
+    .replace(HEREDOC_RE, (_m, marker) => `<<${marker} <redacted> ${marker}`)
+    .replace(MESSAGE_FLAG_RE, (_m, flag, sp) => `${flag}${sp}<redacted>`);
+}
+
 function classifyShape(sig, { compound, sample }) {
-  if (SENSITIVE_RE.test(sample || sig)) {
+  if (SENSITIVE_RE.test(stripMessagePayloads(sample || sig))) {
     return { bucket: "Deny/Ask", reason: "sensitive / prod-mutating / secret-touching — wants an explicit gate" };
   }
   if (compound) {
@@ -605,6 +622,7 @@ export {
   isAlreadyAllowed,
   isReadOnlyProbe,
   isEphemeralDoc,
+  stripMessagePayloads,
 };
 
 // ---------------------------------------------------------------------------

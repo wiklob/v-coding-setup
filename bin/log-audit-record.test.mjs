@@ -62,7 +62,8 @@ throws("string record rejected", () => finalizeRecord("nope", TS));
 // --- sink allowlist: known basenames resolve under pipeline/audit/; others reject ---
 check("tool-fit sink allowed", resolveSinkPath("tool-fit.jsonl").endsWith("/pipeline/audit/tool-fit.jsonl"));
 check("produced-review sink allowed", resolveSinkPath("produced-review.jsonl").endsWith("/pipeline/audit/produced-review.jsonl"));
-check("both sinks registered", ALLOWED_SINKS.has("tool-fit.jsonl") && ALLOWED_SINKS.has("produced-review.jsonl"));
+check("security-review-gate sink allowed", resolveSinkPath("security-review-gate.jsonl").endsWith("/pipeline/audit/security-review-gate.jsonl"));
+check("all sinks registered", ALLOWED_SINKS.has("tool-fit.jsonl") && ALLOWED_SINKS.has("produced-review.jsonl") && ALLOWED_SINKS.has("security-review-gate.jsonl"));
 throws("unknown sink rejected", () => resolveSinkPath("errors.jsonl"));
 throws("path-traversal sink rejected", () => resolveSinkPath("../secrets.jsonl"));
 throws("absent sink rejected", () => resolveSinkPath(undefined));

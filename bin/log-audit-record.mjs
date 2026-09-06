@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // ~/.claude/bin/log-audit-record.mjs
 // Sanctioned append helper for the retrospective review-lens sinks
-// (pipeline/audit/tool-fit.jsonl, pipeline/audit/produced-review.jsonl). (V-335)
+// (pipeline/audit/tool-fit.jsonl, pipeline/audit/produced-review.jsonl,
+// pipeline/audit/security-review-gate.jsonl). (V-335, V-603)
 //
 // WHY THIS EXISTS — the sensitive-file prompt.
 //   A guard hook (guard-sensitive-access.py, PreToolUse:Bash) string-scans every Bash
@@ -56,7 +57,7 @@ import { redact } from "./transcript-resolver.mjs";
 
 // The review-lens sinks this helper is allowed to write. Restricting to known
 // basenames keeps --sink from being pointed at an arbitrary path (no traversal).
-export const ALLOWED_SINKS = new Set(["tool-fit.jsonl", "produced-review.jsonl"]);
+export const ALLOWED_SINKS = new Set(["tool-fit.jsonl", "produced-review.jsonl", "security-review-gate.jsonl"]);
 
 const AUDIT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "pipeline", "audit");
 

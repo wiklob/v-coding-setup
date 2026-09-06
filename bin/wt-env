@@ -1,0 +1,32 @@
+#!/bin/sh
+# wt-env — guard-safe env wrapper (V-435).
+# Sources ./.envrc (auto-exporting) then execs the given command, as one plain
+# invocation the harness worktree-isolation guard accepts. Replaces the refused
+# inline `. ./.envrc && <cmd>` shape (workflow-conventions.md §5).
+#
+# python/python3 are additionally resolved to ./.venv/bin/python when that
+# venv exists (V-523) — so `wt-env python3 <script>` carries both the repo's
+# deps and its direnv-exported env in one guard-safe call, closing the loop
+# `eval "$(direnv export bash)"; .venv/bin/python …` was groping for (that
+# compound is refused by the worktree-isolation guard as "too complex to
+# verify"). Falls back to PATH's python/python3 when no ./.venv/bin/python
+# exists.
+# Usage: wt-env <cmd> [args…]   — run from the dir whose .envrc applies.
+set -e
+[ $# -ge 1 ] || { echo "usage: wt-env <cmd> [args...]" >&2; exit 2; }
+if [ -f ./.envrc ]; then
+  set -a
+  . ./.envrc
+  set +a
+else
+  echo "wt-env: warning: no ./.envrc in $PWD (missing symlink? conventions §5)" >&2
+fi
+
+cmd="$1"; shift
+case "$cmd" in
+  python|python3)
+    [ -x ./.venv/bin/python ] && cmd="./.venv/bin/python"
+    ;;
+esac
+
+exec "$cmd" "$@"

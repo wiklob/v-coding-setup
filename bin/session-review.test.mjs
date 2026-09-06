@@ -17,6 +17,7 @@ import {
   isAlreadyAllowed,
   isReadOnlyProbe,
   isEphemeralDoc,
+  stripMessagePayloads,
 } from "./session-review.mjs";
 
 let fails = 0;
@@ -38,6 +39,25 @@ check("classify: compound → Script", classifyShape("git add && git commit", { 
 check("classify: read verb → Allow", classifyShape("git status", { compound: false, sample: "git status" }).bucket === "Allow");
 check("classify: force-push → Deny/Ask", classifyShape("git push", { compound: false, sample: "git push --force origin main" }).bucket === "Deny/Ask");
 check("classify: prod migration → Deny/Ask", classifyShape("supabase db", { compound: false, sample: "supabase db push" }).bucket === "Deny/Ask");
+
+// --- V-488: sensitive keyword sitting inert in a message/note payload should
+// not classify as a Deny/Ask on the payload text alone; the same keyword still
+// gates when it names the command actually being run. ---------------------
+const prBodyHeredoc =
+  'gh pr create --title "x" --body "$(cat <<\'EOF\'\nThis PR adds a script that documents how supabase db push works in CI.\nEOF\n)"';
+check("classify: sensitive keyword inert in PR-body heredoc → not Deny/Ask",
+  classifyShape("gh pr create", { compound: false, sample: prBodyHeredoc }).bucket !== "Deny/Ask");
+check("classify: sensitive keyword inert in simple --message → not Deny/Ask",
+  classifyShape("git commit", { compound: false, sample: 'git commit -m "note: mentions supabase db push in passing"' }).bucket !== "Deny/Ask");
+check("classify: rg pattern containing .env text is still not Deny/Ask",
+  classifyShape("rg", { compound: false, sample: 'rg -n "process.env" src/' }).bucket !== "Deny/Ask");
+check("classify: actual sensitive command inside bash -c still Deny/Ask",
+  classifyShape("bash", { compound: false, sample: "bash -c 'supabase db push'" }).bucket === "Deny/Ask");
+check("classify: actual sanctioned sb-push --apply still Deny/Ask",
+  classifyShape("wt-env", { compound: false, sample: "wt-env sb-push --apply" }).bucket === "Deny/Ask");
+check("stripMessagePayloads: redacts heredoc body", !/supabase db push/.test(stripMessagePayloads(prBodyHeredoc)));
+check("stripMessagePayloads: leaves an unrelated command untouched",
+  stripMessagePayloads("git status") === "git status");
 
 // --- V-132: settings-awareness (Lens A/Allow suppression) --------------------
 const al = ["Read", "mcp__linear__save_issue", "Bash(*)", "Bash(git *)", "mcp__sentry"];

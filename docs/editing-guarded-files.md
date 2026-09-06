@@ -42,6 +42,24 @@ that isn't actually a secret operation (inert command text there; a filename her
   name matches a protected token. The durable fix is to rename it out of collision; until
   then, use the git hatch.
 
+### Which `settings.json` actually gates (V-667)
+
+The guard's settings gate is scoped to the **installed** file — the one the harness loads,
+sitting directly inside a `.claude/` directory (`~/.claude/settings.json`,
+`<repo>/.claude/settings{,.local}.json`). Editing that still prompts, on purpose.
+
+A `settings.json` at the **root of a ticket worktree** is *not* that file. This repo *is*
+the `.claude` dir, so every checkout carries `settings.json` at its root; that copy is a PR
+artifact — it changes nothing until the branch merges, and `/land-ticket` reviews it on the
+way (`bin/sensitive-diff-scan` rates any `settings*.json` permission-surface edit **HIGH**).
+Gating it bought no security and froze background sessions on a prompt nobody was there to
+answer: V-667 measured ~25h of dead time across three V-652 stages, all on that one path.
+
+So: gate the installed path, never "any file named `settings.json`". `is_installed_settings()`
+in `bin/guard-sensitive-access.py` is the single decision point — it resolves a relative path
+against the hook event's `cwd`, and **fails safe** (gates) when there is no `cwd` to resolve
+against. Do not re-widen it.
+
 ## The procedure (three rules)
 
 1. **Edit the repo source, never the live install.** The guards are versioned here

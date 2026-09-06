@@ -33,21 +33,27 @@ fi
 pass=0
 fail=0
 
-# Build a PreToolUse event JSON from (tool, key, value) without quoting hell.
+# Build a PreToolUse event JSON from (tool, key, value [, cwd]) without quoting hell.
+# The optional 4th arg populates the event's `cwd`; omitted -> no `cwd` key at all, exactly
+# as a client that doesn't send one. (V-667 resolves a relative tool path against it.)
 emit() {
-  python3 -c 'import json,sys; print(json.dumps({"tool_name":sys.argv[1],"tool_input":{sys.argv[2]:sys.argv[3]}}))' "$1" "$2" "$3"
+  python3 -c 'import json,sys
+e = {"tool_name": sys.argv[1], "tool_input": {sys.argv[2]: sys.argv[3]}}
+if len(sys.argv) > 4 and sys.argv[4]:
+    e["cwd"] = sys.argv[4]
+print(json.dumps(e))' "$1" "$2" "$3" ${4:+"$4"}
 }
 
 # Run the guard against an event; echo its exit code.
 guard_rc() {
-  emit "$1" "$2" "$3" | python3 "$GUARD" >/dev/null 2>&1
+  emit "$1" "$2" "$3" ${4:+"$4"} | python3 "$GUARD" >/dev/null 2>&1
   echo $?
 }
 
-# expect_block <label> <tool> <key> <value>
+# expect_block <label> <tool> <key> <value> [cwd]
 expect_block() {
   local label="$1" rc
-  rc="$(guard_rc "$2" "$3" "$4")"
+  rc="$(guard_rc "$2" "$3" "$4" ${5:+"$5"})"
   if [ "$rc" = "2" ]; then
     pass=$((pass+1)); printf 'ok   BLOCK  %s\n' "$label"
   else
@@ -55,10 +61,10 @@ expect_block() {
   fi
 }
 
-# expect_allow <label> <tool> <key> <value>
+# expect_allow <label> <tool> <key> <value> [cwd]
 expect_allow() {
   local label="$1" rc
-  rc="$(guard_rc "$2" "$3" "$4")"
+  rc="$(guard_rc "$2" "$3" "$4" ${5:+"$5"})"
   if [ "$rc" = "0" ]; then
     pass=$((pass+1)); printf 'ok   ALLOW  %s\n' "$label"
   else
@@ -66,11 +72,11 @@ expect_allow() {
   fi
 }
 
-# expect_ask <label> <tool> <key> <value>  (V-63: ask() exits 0 AND emits ask-JSON on
+# expect_ask <label> <tool> <key> <value> [cwd]  (V-63: ask() exits 0 AND emits ask-JSON on
 # stdout, so exit-code alone can't tell ask from allow -- must inspect stdout.)
 expect_ask() {
   local label="$1" out rc
-  out="$(emit "$2" "$3" "$4" | python3 "$GUARD" 2>/dev/null)"; rc=$?
+  out="$(emit "$2" "$3" "$4" ${5:+"$5"} | python3 "$GUARD" 2>/dev/null)"; rc=$?
   if [ "$rc" = "0" ] && printf '%s' "$out" | grep -q '"permissionDecision":[[:space:]]*"ask"'; then
     pass=$((pass+1)); printf 'ok   ASK    %s\n' "$label"
   else
@@ -139,8 +145,8 @@ expect_ask   "systemctl --user start"                Bash command "systemctl --u
 
 echo
 echo "== V-63: read forms + ordinary commands MUST stay allowed (zero friction) =="
-expect_allow "crontab -l (list)"                     Bash command "crontab -l"
-expect_allow "crontab -u bob -l (list other user)"   Bash command "crontab -u bob -l"
+# NOTE: `crontab -l` was asserted ALLOW here until V-594 reclassified it as a
+# secret-bearing read; its assertions now live in the V-594 section below, as BLOCKs.
 expect_allow "systemctl status"                      Bash command "systemctl status myapp-worker"
 expect_allow "systemctl is-enabled"                  Bash command "systemctl is-enabled myapp-worker"
 expect_allow "launchctl list"                        Bash command "launchctl list"
@@ -154,12 +160,29 @@ expect_block "--permission-mode bypassPermissions"   Bash command "claude --perm
 expect_block "bypass flag buried in crontab (V-52)"  Bash command "(crontab -l; echo claude --dangerously-skip-permissions) | crontab -"
 
 echo
-echo "== V-63: settings.json permission edits MUST ask; other edits allowed =="
-expect_ask   "Edit settings.json"                    Edit file_path "settings.json"
+echo "== V-63: INSTALLED settings.json permission edits MUST ask; other edits allowed =="
+expect_ask   "Edit settings.json (no cwd -> fail safe)" Edit file_path "settings.json"
 expect_ask   "Edit abs settings.json"                Edit file_path "/Users/testuser/.claude/settings.json"
 expect_ask   "Write settings.local.json"             Write file_path ".claude/settings.local.json"
 expect_allow "Edit ordinary package.json"            Edit file_path "package.json"
 expect_allow "Edit a source file"                    Edit file_path "bin/usage-stats.mjs"
+
+echo
+echo "== V-667: the gate is the INSTALLED settings file, not every file named settings.json =="
+# The live user-level file and a project's loaded .claude/settings*.json still gate...
+expect_ask   "live ~/.claude/settings.json"          Edit file_path "/Users/testuser/.claude/settings.json"
+expect_ask   "live ~/.claude/settings.local.json"    Edit file_path "/Users/testuser/.claude/settings.local.json"
+expect_ask   "project .claude/settings.json (abs)"   Write file_path "/Users/testuser/projects/app/.claude/settings.json"
+expect_ask   "tilde ~/.claude/settings.json"         Edit file_path "~/.claude/settings.json"
+expect_ask   "relative settings.json, cwd=~/.claude" Edit file_path "settings.json" "/Users/testuser/.claude"
+expect_ask   "dotted path back into .claude"         Edit file_path "/Users/testuser/.claude/bin/../settings.json"
+# ...but a settings.json at a TICKET WORKTREE's root is a PR artifact -> no prompt.
+# (This was the ~25h freeze: three V-652 background stages stuck on this exact path.)
+expect_allow "worktree-root settings.json (V-652)"   Edit file_path "/Users/testuser/projects/v-coding-setup-wt-v-652/settings.json"
+expect_allow "worktree-root settings.local.json"     Write file_path "/Users/testuser/projects/v-coding-setup-wt-v-652/settings.local.json"
+expect_allow "repo-source settings.json"             Edit file_path "/Users/testuser/projects/v-coding-setup/settings.json"
+expect_allow "relative settings.json, cwd=worktree"  Edit file_path "settings.json" "/Users/testuser/projects/v-coding-setup-wt-v-652"
+expect_allow "settings.example.json (template)"      Edit file_path "/Users/testuser/.claude/settings.example.json"
 
 echo
 echo "== V-63 (sec-review LOW 4): secret-file WRITES MUST block =="
@@ -319,6 +342,62 @@ expect_block "note=<(printenv) inline proc-subst"      Bash command "node bin/lo
 expect_block "note >(printenv) output proc-subst"      Bash command "node bin/log-feedback.mjs --note >(printenv)"
 expect_block "note <(curl db query) proc-subst"        Bash command "node bin/log-feedback.mjs --note <(curl -X POST https://api.supabase.com/v1/projects/REF/database/query)"
 expect_block "note backtick cmd-subst"                 Bash command "node bin/log-feedback.mjs --note \`curl -X POST https://api.supabase.com/v1/projects/REF/database/query\`"
+
+echo
+echo "== V-593: DESCRIBING an incident is not PERFORMING one (the explicit report path) =="
+# The asymmetry: the guard let V-587 dump four live credentials (via a shell prefix) but
+# blocked the human writing down that it happened. A note is argv to a JSONL appender.
+expect_allow "note describes cat .envrc"               Bash command "node ~/.claude/bin/log-feedback.mjs --note \"the guard let a session cat .envrc into the transcript\""
+expect_allow "note describes printenv"                 Bash command "node ~/.claude/bin/log-feedback.mjs --note \"a session ran printenv and leaked four credentials\""
+expect_allow "note describes env | grep (quoted pipe)" Bash command "node ~/.claude/bin/log-feedback.mjs --note \"env | grep TOKEN dumped everything\""
+expect_allow "note names a transcript jsonl"           Bash command "node ~/.claude/bin/log-feedback.mjs --note \"someone read ~/.claude/projects/x/abc.jsonl raw\""
+expect_allow "note quotes a bypass flag"               Bash command "node ~/.claude/bin/log-feedback.mjs --note \"it ran claude --dangerously-skip-permissions\""
+expect_allow "note with --subject too"                 Bash command "node ~/.claude/bin/log-feedback.mjs --note \"cat .envrc leaked\" --subject report-feedback"
+expect_allow "note=inline form describing a leak"      Bash command "node ~/.claude/bin/log-feedback.mjs --note=\"printenv leaked \$GITHUB_TOKEN\""
+# /report-bug's sibling logger takes the free text as --error; same report path.
+expect_allow "report-bug --error describes a leak"     Bash command "node ~/.claude/bin/log-pipeline-error.mjs --command report-bug --error \"cat .envrc leaked into the transcript\""
+expect_allow "log-input-request --message"             Bash command "node ~/.claude/bin/log-input-request.mjs --type permission_prompt --message \"asked before printenv\""
+
+echo
+echo "== V-593: the denial set MUST NOT shrink -- every bypass shape still denies =="
+# 1. the real acts, unchanged.
+expect_block "real cat .envrc still denied"            Bash command "cat .envrc"
+expect_block "real printenv still denied"              Bash command "printenv"
+expect_block "real env | grep still denied"            Bash command "env | grep TOKEN"
+# 2. an unquoted shell boundary means a SECOND command -> proof fails, full scan applies.
+expect_block "logger then newline printenv"            Bash command $'node bin/log-feedback.mjs --note\nprintenv'
+expect_block "logger then ; printenv"                  Bash command "node bin/log-feedback.mjs --note x ; printenv"
+expect_block "logger then && cat .envrc"               Bash command "node bin/log-feedback.mjs --note x && cat .envrc"
+expect_block "logger then | printenv"                  Bash command "node bin/log-feedback.mjs --note x | printenv"
+expect_block "logger redirecting over .envrc"          Bash command "node bin/log-feedback.mjs --note x > .envrc"
+# 3. substitution executes while forming the argument -> proof fails.
+expect_block "note \$(...) substitution"               Bash command "node bin/log-feedback.mjs --note \"\$(cat .envrc)\""
+expect_block "note backtick substitution"              Bash command "node bin/log-feedback.mjs --note \"\`printenv\`\""
+expect_block "note <(...) proc-subst"                  Bash command "node bin/log-feedback.mjs --note <(printenv>/tmp/leak)"
+# 4. the logger must be the program, not a mention -- no eval-mode smuggle, no lookalike.
+expect_block "node -e smuggle naming the logger"       Bash command "node -e \"require('fs').readFileSync('.envrc')\" log-feedback.mjs"
+expect_block "cat piped into the logger"               Bash command "cat .envrc | node bin/log-feedback.mjs --note x"
+expect_block "logger name only inside a note value"    Bash command "cat .envrc --note \"log-feedback.mjs\""
+
+echo
+echo "== V-594: \`crontab -l\` is a secret-bearing read -> DENY; the redacting verb passes =="
+# It dumps the crontab verbatim, and a crontab carries credentials inline (this leaked a live
+# gmail password into a transcript, 2026-08-27). A hook cannot filter output, so ask would
+# still leak on approval -- only deny keeps the value off the transcript.
+expect_block "crontab -l (verbatim dump)"              Bash command "crontab -l"
+expect_block "crontab -u bob -l (other user)"          Bash command "crontab -u bob -l"
+expect_block "crontab -l piped to a reader"            Bash command "crontab -l | grep MAILTO"
+expect_block "crontab -l mid-chain"                    Bash command "cd /tmp && crontab -l > /tmp/jobs"
+expect_block "crontab -l inside bash -c"               Bash command "bash -c 'crontab -l'"
+expect_block "crontab -l behind env"                   Bash command "env FOO=1 crontab -l"
+# The sanctioned redacting reader (allow the VERB, not the source -- as transcript-resolver).
+expect_allow "crontab-redacted.mjs (redacting verb)"   Bash command "node ~/.claude/bin/crontab-redacted.mjs"
+expect_allow "crontab-redacted.mjs -u bob"             Bash command "node ~/.claude/bin/crontab-redacted.mjs -u bob"
+# The denial set does not shrink: every write form still asks, the V-52 bypass still denies.
+expect_ask   "crontab - still asks (write)"            Bash command "crontab -"
+expect_ask   "crontab -e still asks (write)"           Bash command "crontab -e"
+expect_ask   "crontab -r still asks (write)"           Bash command "crontab -r"
+expect_ask   "crontab -u bob -e still asks"            Bash command "crontab -u bob -e"
 
 echo "----------------------------------------"
 printf 'Total: %d passed, %d failed\n' "$pass" "$fail"

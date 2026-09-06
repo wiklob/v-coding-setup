@@ -50,6 +50,7 @@
       "ScheduleWakeup",
       "EnterWorktree",
       "ExitWorktree",
+      "EnterPlanMode",
       "mcp__linear__list_issues",
       "mcp__linear__list_projects",
       "mcp__linear__list_teams",

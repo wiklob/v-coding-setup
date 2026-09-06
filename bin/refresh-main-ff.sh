@@ -32,6 +32,17 @@
 # reconciliation debt as before, never discarded). Never forces, never resets
 # hard, never discards drift.
 #
+# V-658 (2026-09): the whole-file overwrite-restore above treated ALL drift as
+# one blob — including a file whose working copy differs from HEAD only in
+# MODE (chmod, identical content). That isn't real drift worth preserving,
+# but it still got captured and overwrite-restored, which silently reverted
+# an incoming commit that changed the file's content back to the OLD blob
+# (`bin/envrc-names`'s V-587 fix reverted this way, reported as "drift
+# preserved verbatim"). Fix: partition drift first — a file whose working
+# blob hash equals HEAD's blob hash (mode-only) is reset to HEAD *before* the
+# ff is attempted, so the incoming commit's mode+content simply wins. Only
+# genuine CONTENT drift still goes through the stash/restore path below.
+#
 # Degrades safely: a clean checkout just fast-forwards; if ff is blocked by
 # something other than unstaged drift (staged change, unrelated state) the
 # stash is restored and the original surface-and-continue note is emitted
@@ -60,19 +71,52 @@ fi
 # ff aborted. Capture the unstaged tracked drift (the perpetual settings.json /
 # gate-audit.md churn) and preserve it verbatim across the ff. (Portable read
 # loop rather than `mapfile` so this runs under bash 3.2 too.)
-drift=()
+all_drift=()
 while IFS= read -r f; do
-  [ -n "$f" ] && drift+=("$f")
+  [ -n "$f" ] && all_drift+=("$f")
 done < <(g diff --name-only)
 
-if [ "${#drift[@]}" -eq 0 ]; then
+if [ "${#all_drift[@]}" -eq 0 ]; then
   # Nothing unstaged to stash — the block is staged/other state, not the drift
   # case this helper handles. Surface and continue, exactly as before.
   echo "refresh-main-ff: fetched origin/$base (tip current); local $base NOT fast-forwarded — ff-only blocked by non-drift state (staged change?). Resolve manually, then 'git -C \"$main\" merge --ff-only origin/$base'. Continuing teardown."
   exit 0
 fi
 
-g stash push -q -m "land-teardown(V-334): preserve local drift across ff" -- "${drift[@]}" || {
+# Partition: a file whose working blob equals HEAD's blob differs only in
+# MODE — not real drift (V-658) — vs genuine content drift, which still needs
+# the stash/restore treatment below.
+mode_only=()
+content_drift=()
+for f in "${all_drift[@]}"; do
+  wblob="$(g hash-object "$f" 2>/dev/null)"
+  hblob="$(g rev-parse "HEAD:$f" 2>/dev/null)"
+  if [ -n "$wblob" ] && [ -n "$hblob" ] && [ "$wblob" = "$hblob" ]; then
+    mode_only+=("$f")
+  else
+    content_drift+=("$f")
+  fi
+done
+
+# Mode-only drift isn't real drift — reset it to HEAD so it stops blocking
+# the ff-only merge; the incoming commit's mode+content simply wins.
+for f in "${mode_only[@]}"; do
+  g checkout HEAD -- "$f"
+done
+
+if [ "${#content_drift[@]}" -eq 0 ]; then
+  if g merge --ff-only "origin/$base" >/dev/null 2>&1; then
+    echo "refresh-main-ff: fast-forwarded local $base in $main (discarded mode-only drift on ${#mode_only[@]} file(s): ${mode_only[*]})"
+    exit 0
+  fi
+  echo "refresh-main-ff: fetched origin/$base (tip current); local $base NOT fast-forwarded — ff-only blocked by non-drift state (staged change?). Resolve manually, then 'git -C \"$main\" merge --ff-only origin/$base'. Continuing teardown."
+  exit 0
+fi
+
+extra=""
+[ "${#mode_only[@]}" -gt 0 ] && extra=" (also discarded mode-only drift on ${#mode_only[@]} file(s): ${mode_only[*]})"
+
+g stash push -q -m "land-teardown(V-334): preserve local drift across ff" -- "${content_drift[@]}" || {
   echo "refresh-main-ff: could not stash local drift — leaving main un-advanced (drift untouched). Continuing teardown."
   exit 0
 }
@@ -80,10 +124,10 @@ g stash push -q -m "land-teardown(V-334): preserve local drift across ff" -- "${
 if g merge --ff-only "origin/$base" 2>/dev/null; then
   # Restore each drifted file VERBATIM from the stash (overwrite, no 3-way
   # merge — cannot conflict or corrupt), then drop the stash.
-  g checkout "stash@{0}" -- "${drift[@]}"
-  g restore --staged "${drift[@]}" 2>/dev/null || true
+  g checkout "stash@{0}" -- "${content_drift[@]}"
+  g restore --staged "${content_drift[@]}" 2>/dev/null || true
   g stash drop -q
-  echo "refresh-main-ff: fast-forwarded local $base in $main (local drift on ${#drift[@]} file(s) preserved verbatim: ${drift[*]})"
+  echo "refresh-main-ff: fast-forwarded local $base in $main (local drift on ${#content_drift[@]} file(s) preserved verbatim: ${content_drift[*]})$extra"
   exit 0
 fi
 

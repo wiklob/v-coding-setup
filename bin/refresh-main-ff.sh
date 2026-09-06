@@ -112,7 +112,12 @@ done
 
 # Mode-only drift isn't real drift — reset it to HEAD so it stops blocking
 # the ff-only merge; the incoming commit's mode+content simply wins.
-for f in "${mode_only[@]}"; do
+# (`${mode_only[@]+"${mode_only[@]}"}` rather than a bare `${mode_only[@]}`:
+# bash <4.4 — including macOS's system /bin/bash 3.2, which is what `bash`
+# resolves to on the CI runner even though a newer bash is on PATH first
+# locally — throws "unbound variable" under `set -u` when expanding an
+# array that has zero elements, which mode_only legitimately can here.)
+for f in "${mode_only[@]+"${mode_only[@]}"}"; do
   g checkout HEAD -- "$f"
 done
 
@@ -182,9 +187,11 @@ done
 g stash drop -q 2>/dev/null || true
 
 if [ "${#conflicts[@]}" -gt 0 ]; then
-  echo "refresh-main-ff: fast-forwarded local $base in $main — CONFLICT merging local drift into the incoming change on ${#conflicts[@]} file(s): ${conflicts[*]} (conflict markers left in place; resolve by hand). Drift merged cleanly on ${#merged[@]} other file(s)$extra."
+  # merged can legitimately be empty here (every content-drift file
+  # conflicted) — same bash-3.2-safe guard as mode_only above.
+  echo "refresh-main-ff: fast-forwarded local $base in $main — CONFLICT merging local drift into the incoming change on ${#conflicts[@]} file(s): ${conflicts[*]} (conflict markers left in place; resolve by hand). Drift merged cleanly on ${#merged[@]} other file(s): ${merged[*]+"${merged[*]}"}$extra."
   exit 0
 fi
 
-echo "refresh-main-ff: fast-forwarded local $base in $main (local drift merged onto the incoming change on ${#merged[@]} file(s): ${merged[*]})$extra"
+echo "refresh-main-ff: fast-forwarded local $base in $main (local drift merged onto the incoming change on ${#merged[@]} file(s): ${merged[*]+"${merged[*]}"})$extra"
 exit 0

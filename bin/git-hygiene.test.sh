@@ -112,5 +112,33 @@ if branch_exists feature-merged; then bad "merged branch not pruned under --appl
 if branch_exists flingelms30/v-gone; then bad "namespace gone-upstream branch not pruned under --apply"; else ok "EFFECT: in-namespace upstream-gone (squash-landed) branch pruned under --apply"; fi
 if wt_exists "$SCRATCH/wt-landed"; then bad "landed worktree not removed under --apply"; else ok "EFFECT: upstream-gone clean worktree removed under --apply"; fi
 
+# ---------- 4. FF: dirty main reports loudly instead of skipping silently (V-583) ----------
+ORIGIN2="$SCRATCH/origin2.git"
+MAIN2="$SCRATCH/main2"
+OTHER2="$SCRATCH/other2"
+q git init --bare -b main "$ORIGIN2"
+q git clone "$ORIGIN2" "$MAIN2"
+(cd "$MAIN2" && echo one > f && q git add f && q git commit -m init && q git push -u origin main)
+
+# advance origin behind MAIN2's back, from a second clone → MAIN2 is 1 commit behind.
+q git clone "$ORIGIN2" "$OTHER2"
+(cd "$OTHER2" && echo two >> f && q git add f && q git commit -m advance && q git push origin main)
+
+# dirty MAIN2 with one cruft path + one real content edit.
+mkdir -p "$MAIN2/pipeline/audit"
+echo log-noise > "$MAIN2/pipeline/audit/x.log"
+echo local-edit >> "$MAIN2/f"
+
+BEFORE_HEAD2="$(git -C "$MAIN2" rev-parse HEAD)"
+OUT="$(node "$HELPER" "$MAIN2" 2>&1)"
+AFTER_HEAD2="$(git -C "$MAIN2" rev-parse HEAD)"
+
+echo "$OUT" | grep -qi "SKIPPED — dirty" && ok "FF: dirty main reported loudly (not silent)" || bad "FF: dirty main skip was silent: $OUT"
+echo "$OUT" | grep -q "1 commit(s) behind" && ok "FF: reports correct behind-count" || bad "FF: behind-count missing/wrong: $OUT"
+echo "$OUT" | grep -q "2 dirty path(s)" && ok "FF: reports correct dirty-path count" || bad "FF: dirty-path count missing/wrong: $OUT"
+echo "$OUT" | grep -q "1 cruft" && ok "FF: distinguishes cruft path" || bad "FF: cruft count missing: $OUT"
+echo "$OUT" | grep -q "1 content" && ok "FF: distinguishes content path" || bad "FF: content count missing: $OUT"
+[ "$BEFORE_HEAD2" = "$AFTER_HEAD2" ] && ok "FF: dirty main NOT fast-forwarded" || bad "FF: dirty main was advanced despite dirty tree!"
+
 echo "== $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ]

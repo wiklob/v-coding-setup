@@ -84,6 +84,7 @@
       "mcp__linear__create_attachment_from_upload",
       "mcp__linear__prepare_attachment_upload",
       "mcp__linear__linear_graphql",
+      "mcp__notion__notion-fetch",
       "Edit(~/.claude/pipeline/audit/**)",
       "Write(~/.claude/pipeline/audit/**)"
     ],
@@ -245,6 +246,7 @@
     ],
     "soft_deny": [
       "$defaults",
+      "Notion workspace writes are not auto-approved. The read tool (notion-fetch) is allow-listed and auto-runs; the mutating tools (notion-update-page, notion-update-view, notion-create-view) are a recorded decision to keep prompting — they edit a shared workspace other people read, so each write is confirmed rather than auto-approved. This is a deliberate per-tool split, not a blanket mcp__notion prefix rule.",
       "Never mutate Postgres schema outside supabase/migrations/. Schema changes ship exclusively via Supabase CLI + migration files. Banned even on dev: direct DDL-equivalent calls from app clients, direct psql DDL against the linked DB, Supabase dashboard SQL editor edits, raw SQL writes against system tables."
     ],
     "hard_deny": [

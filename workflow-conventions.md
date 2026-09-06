@@ -66,6 +66,7 @@ Rules:
 - Items are **verifiable from the diff/tests**, not vague ("works well"). Prefer "X endpoint returns Y", "migration applied", "test covers Z".
 - `/land-ticket` checks each item against the merged change before closing. Unmet items are surfaced at its confirm gate — the issue is not auto-closed with unmet acceptance items unless the user explicitly waives them.
 - A plan's Manifest part maps to a ticket; the part's produced-artifact line seeds that ticket's Acceptance.
+- **No bare foreign ticket ID in a title.** A ticket's `title` never contains another ticket's bare ID (`V-123`, `CB-45`, …) — Linear auto-links any bare ID it sees, in a title or a comment, on **any** team (see the PR-mention note above this convention's siblings), so a title like `fix: regression from V-402` silently cross-links V-402 the moment the ticket is filed. Reference another ticket in prose instead — "ticket 402" or "the V-402 regression" — never the bare form, in a title or anywhere else this filing step writes. Every filing site (`/spawn-tickets`, `/triage-findings`, `/harvest-feedback`, `/harvest-pipeline-bugs`, and any other flow that constructs a ticket title or comment) checks the title against this rule before calling `save_issue`/`create_issue`.
 
 ---
 

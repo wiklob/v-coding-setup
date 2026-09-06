@@ -148,7 +148,7 @@ Read `~/.claude/workflow-conventions.md` and `~/.claude/commands/plan-quick.md`.
 
 ### Step b — bulk-create standalone tickets (if A_count + S_count > 0)
 For each AUTO-APPLY or STANDALONE finding:
-- `mcp__linear save_issue` with `team: <linearTeam>`, `project: <standaloneProject>`, `labels: [<scopeLabel>]`, `priority` (critical→1, high→2, med→3, low→4), `title` (≤80 chars, imperative, derived from the issue — strip `[sev]` and `file:line` prefixes), `description` = verbatim finding body + a one-item `## Acceptance` checklist derived from the suggested action.
+- `mcp__linear save_issue` with `team: <linearTeam>`, `project: <standaloneProject>`, `labels: [<scopeLabel>]`, `priority` (critical→1, high→2, med→3, low→4), `title` (≤80 chars, imperative, derived from the issue — strip `[sev]` and `file:line` prefixes; never a bare foreign ticket ID, convention 3), `description` = verbatim finding body + a one-item `## Acceptance` checklist derived from the suggested action.
 - For AUTO-APPLY findings, the description's structured finding line (`[<sev>] <file:line> — <issue> → <action>`) is preserved verbatim so `/bulk-fix` §2's parser picks it up as auto-apply-eligible without any extra signal needed.
 - After each success: append `  → filed as <ID>` to that finding's line in the findings doc. If any create fails: STOP and report — do not silently skip.
 

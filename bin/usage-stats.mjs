@@ -43,11 +43,23 @@
 //       └─ also print the per-command (phase) token attribution + per-tool
 //          response-payload size tables to console (V-79). Resolves a primary
 //          session like the default run, so it still needs --ticket (or --session).
+//   node ~/.claude/bin/usage-stats.mjs --ticket <ID> --cwd <dir>
+//       └─ write to the .claude/usage-stats/ of the repo `<dir>` belongs to,
+//          instead of this script's own install (V-681). Explicit opt-in only —
+//          a bad/non-repo `<dir>` fails loud (exit 3/1), never silently ignored.
+//
+// SINK RESOLUTION (V-681) — without --cwd, the stats file always lands under THIS
+//   SCRIPT's own install (`fileURLToPath(import.meta.url)` → bin/..), never under
+//   the caller's inherited process.cwd(). /land-ticket §8.5 invokes this helper
+//   after the ticket worktree is torn down, when the shell cwd has often already
+//   recovered to $HOME (not a git repo at all) — a `git worktree list` against
+//   inherited cwd fails loud there and the whole computed report used to be thrown
+//   away. See bin/log-audit-record.mjs's AUDIT_DIR for the same pattern.
 //
 // Exit codes:
 //   0  stats file written (or dry-run inspection printed)
 //   1  primary session unresolvable / has no assistant messages / git/fs error
-//   3  bad args
+//   3  bad args (including a malformed/non-repo --cwd)
 
 import { execFileSync } from "node:child_process";
 import {
@@ -60,11 +72,51 @@ import {
   statSync,
 } from "node:fs";
 import { createReadStream } from "node:fs";
-import { join, basename } from "node:path";
+import { join, basename, dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { createInterface } from "node:readline";
 import { resolveTicket } from "./transcript-resolver.mjs";
 import { resolveConversationId } from "./session-identity.mjs";
+
+// The canonical install this script lives in — resolved from THIS FILE's own
+// location, like bin/log-audit-record.mjs's AUDIT_DIR. Used as the sink root
+// whenever no explicit --cwd override is given (V-681): the caller's inherited
+// process.cwd() is not a reliable signal — /land-ticket §8.5 runs this helper
+// after the ticket worktree is torn down, when the shell cwd has often already
+// recovered to $HOME (not a git repo at all), so a `git worktree list` against
+// inherited cwd fails loud and the whole computed report is thrown away.
+const OWN_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+// Resolve the "main worktree" whose .claude/usage-stats/ receives the stats file.
+//   - `cwdOverride` (from --cwd): a deliberate, explicit input — resolve the main
+//     worktree via `git worktree list` run WITH that cwd. Fails loud (never silently
+//     ignored, unlike the old accepted-and-ignored --cwd) on a bad path or a non-repo.
+//   - no override (the default / real land-ticket call shape): resolve from this
+//     script's own install location — never from inherited cwd.
+export function resolveMainWorktree(cwdOverride) {
+  if (cwdOverride == null) return OWN_ROOT;
+  if (!existsSync(cwdOverride)) {
+    throw { code: 3, message: `--cwd: no such directory: ${cwdOverride}` };
+  }
+  let out;
+  try {
+    out = execFileSync("git", ["worktree", "list", "--porcelain"], {
+      encoding: "utf8",
+      cwd: cwdOverride,
+    });
+  } catch (e) {
+    throw { code: 3, message: `--cwd ${cwdOverride}: not inside a git repo (git worktree list failed: ${e.message})` };
+  }
+  const mainWt = out
+    .split("\n")
+    .find((l) => l.startsWith("worktree "))
+    ?.slice("worktree ".length);
+  if (!mainWt) {
+    throw { code: 3, message: `--cwd ${cwdOverride}: could not determine main worktree.` };
+  }
+  return mainWt;
+}
 
 function parseArgs(argv) {
   const out = {};
@@ -546,7 +598,11 @@ if (!isMain) {
 async function runCli() {
 const args = parseArgs(process.argv.slice(2));
 if (!args || !args.ticket) {
-  console.error("Usage: --ticket <ID> [--pr <n>] [--session <id>] [--dry-run] [--by-command]");
+  console.error("Usage: --ticket <ID> [--pr <n>] [--session <id>] [--cwd <dir>] [--dry-run] [--by-command]");
+  process.exit(3);
+}
+if (args.cwd === true) {
+  console.error("Usage: --cwd requires a value (a directory inside the repo whose sink you want).");
   process.exit(3);
 }
 const ticket = String(args.ticket);
@@ -641,20 +697,10 @@ if (args["dry-run"]) {
 // 3. Resolve main worktree + write output JSON.
 let mainWt;
 try {
-  const out = execFileSync("git", ["worktree", "list", "--porcelain"], {
-    encoding: "utf8",
-  });
-  mainWt = out
-    .split("\n")
-    .find((l) => l.startsWith("worktree "))
-    ?.slice("worktree ".length);
+  mainWt = resolveMainWorktree(typeof args.cwd === "string" ? args.cwd : null);
 } catch (e) {
-  console.error(`ERROR: git worktree list failed: ${e.message}`);
-  process.exit(1);
-}
-if (!mainWt) {
-  console.error("ERROR: could not determine main worktree.");
-  process.exit(1);
+  console.error(`ERROR: ${e.message}`);
+  process.exit(e.code ?? 1);
 }
 
 const statsDir = join(mainWt, ".claude/usage-stats");

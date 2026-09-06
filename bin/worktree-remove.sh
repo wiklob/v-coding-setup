@@ -25,7 +25,7 @@ wt="${1:?usage: worktree-remove.sh <worktree-path>}"
 
 # Regenerable build artefacts that routinely make `git worktree remove` refuse
 # with "Directory not empty" even though there is no real work to lose (V-527:
-# 33 of 34 accumulated cbapp worktrees carried nothing but leftover .next/
+# 33 of 34 accumulated myapp worktrees carried nothing but leftover .next/
 # output). Extend this list as new build tools land regenerable output under a
 # worktree root — never widen the removal itself to a blanket `git clean -fdx`.
 REGENERABLE_ARTEFACTS="

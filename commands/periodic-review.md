@@ -59,7 +59,7 @@ For the auto-file routes (bug / pipeline-ticket), key each with `review-key: <ro
 For **craft-revision**, dedupe a *proposal* against an already-open `/review-skill`-candidate note for the same subject the same way — bump, don't duplicate.
 
 ## 6. Emit the durable report + act (gated by mode)
-**Always write the durable report** to `~/.claude/pipeline/audit/periodic-review-<YYYY-MM-DD>.md` (absolute, canonical checkout — stamp `<date>` from `date +%F`), with these sections (headings stable so a later reader can grep across reports):
+**Always write the durable report** through the sanctioned writer — pipe the rendered markdown on stdin: `<report markdown> | node ~/.claude/bin/write-periodic-review-report.mjs --date <YYYY-MM-DD>` (stamp `<date>` from `date +%F`). It writes `pipeline/audit/periodic-review-<date>.md` in the canonical checkout regardless of caller cwd and prints the resolved path back (convention 8). **Never** a `Write`/`Edit` tool call or an inline `node -e`/`python3 -c` fallback here (V-446): `~/.claude` is a harness-protected path that prompts on both regardless of the settings.json allow rule (GH#66525), and the report's own prose can quote guard-related words (credentials, readFileSync) that trip `guard-sensitive-access.py`'s whole-command secret-path scan when embedded as a command-line literal — the sanctioned writer takes the body over stdin, so the guard never sees it. In an unattended `--yes` cron run there is no one to answer either prompt, so this is the difference between a persisted report and a silently dead run. With these sections (headings stable so a later reader can grep across reports):
 ```
 # Periodic review — <date>
 review-mode: auto   ·   window: <start> → <end>   ·   sessions analyzed (all-time): <n>   ·   sinks: <per-lens population>
@@ -103,5 +103,6 @@ Emit `result:` on its own line: `result: /periodic-review — report at pipeline
 - **Propose, never auto-retire, for craft:** the craft-revision route is surfaced for a human `/review-skill`; auto-retiring/reinforcing a rail is never done unattended.
 - **Auto-file is dedupe-guarded (convention 8):** read back every created/updated issue's `projectId` against the destination ID; abort loudly on mismatch; never fabricate an ID.
 - **Watermark only via the `.mjs` helper** (fs write), never a `Write`/`>` to the dotfile (sensitive-file prompt freezes the cron).
+- **Report only via the `.mjs` helper** (V-446): `<markdown> | node ~/.claude/bin/write-periodic-review-report.mjs --date <date>`, never `Write`/`Edit`/an inline `node -e` — same protected-path prompt, plus a report quoting guard-related prose can trip `guard-sensitive-access.py`'s command-line scan.
 - **An empty lens is "no signal," not an invented finding** (`craft/judgment.md`): don't manufacture a recommendation to fill a section.
 - One invocation = one review pass. `--dry-run` writes the report but no Linear + advances nothing; it overrides `--yes`.

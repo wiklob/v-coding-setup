@@ -4,10 +4,12 @@
 // detection (` && `), and the failed-call census (tool_result.is_error).
 // Run: node bin/usage-stats.test.mjs   (exit 0 = pass, 1 = fail)
 
-import { writeFileSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { writeFileSync, unlinkSync, mkdtempSync, rmSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { scan, selectTranscript } from "./usage-stats.mjs";
+import { scan, selectTranscript, resolveMainWorktree } from "./usage-stats.mjs";
 
 let fails = 0;
 function check(name, cond) {
@@ -108,6 +110,79 @@ try {
 
   const exactBeatsPrefix = selectTranscript(["abc", "abcdef"], "abc");
   check("selectTranscript: exact wins even when it also prefixes another", exactBeatsPrefix.kind === "exact");
+}
+
+// --- resolveMainWorktree: cwd-independent sink resolution (V-681) --------------
+{
+  const ownRoot = resolveMainWorktree(null);
+  const scriptDir = dirname(fileURLToPath(import.meta.url));
+  check(
+    "no --cwd: resolves to this script's own install root, never inherited cwd",
+    ownRoot === join(scriptDir, "..")
+  );
+
+  // A non-git directory (a bare tmpdir) must never crash the caller — it hits
+  // the branch that used to throw "not a git repository" when the caller's
+  // inherited cwd (e.g. $HOME post-teardown) wasn't a repo. With no --cwd at
+  // all, resolveMainWorktree never touches git, so it can't hit that failure.
+  const bareDir = mkdtempSync(join(tmpdir(), "usage-stats-bare-"));
+  try {
+    let threw = false;
+    try {
+      resolveMainWorktree(null);
+    } catch {
+      threw = true;
+    }
+    check("no --cwd: never depends on git worktree list at all", threw === false);
+  } finally {
+    rmSync(bareDir, { recursive: true, force: true });
+  }
+
+  // Explicit --cwd pointing at a non-existent dir → usage error (exit 3), never
+  // silently ignored (the old, worse behavior this ticket replaces).
+  {
+    let err;
+    try {
+      resolveMainWorktree(join(tmpdir(), "usage-stats-does-not-exist-" + process.pid));
+    } catch (e) {
+      err = e;
+    }
+    check("--cwd non-existent dir: fails loud with code 3", err?.code === 3);
+  }
+
+  // Explicit --cwd pointing at a real dir that is NOT a git repo → fails loud,
+  // not silently ignored.
+  {
+    const notARepo = mkdtempSync(join(tmpdir(), "usage-stats-notrepo-"));
+    let err;
+    try {
+      resolveMainWorktree(notARepo);
+    } catch (e) {
+      err = e;
+    } finally {
+      rmSync(notARepo, { recursive: true, force: true });
+    }
+    check("--cwd non-repo dir: fails loud with code 3", err?.code === 3);
+  }
+
+  // Explicit --cwd pointing at a real git repo → resolves to that repo's main
+  // worktree, honoring the override instead of ignoring it.
+  {
+    const repoDir = mkdtempSync(join(tmpdir(), "usage-stats-repo-"));
+    try {
+      execFileSync("git", ["init", "-q"], { cwd: repoDir });
+      const resolved = resolveMainWorktree(repoDir);
+      // Resolve both sides through realpath-equivalent comparison (macOS tmpdir
+      // is often a symlink, e.g. /tmp -> /private/tmp) by re-deriving via git.
+      const gitMain = execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: repoDir, encoding: "utf8" })
+        .split("\n")
+        .find((l) => l.startsWith("worktree "))
+        ?.slice("worktree ".length);
+      check("--cwd real repo: honors the override", resolved === gitMain);
+    } finally {
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+  }
 }
 
 console.log(fails === 0 ? "\nAll tests passed." : `\n${fails} test(s) FAILED.`);

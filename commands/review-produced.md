@@ -58,7 +58,7 @@ Beyond met/missed — judge the **quality** of what landed, each dimension carry
 
 End §3 with a **Coverage** line: what you did NOT cover (files skipped on a large diff; "did not run the code/tests — verdicts are from reading the merged diff").
 
-## 4. Emit — print, then append the scorecard record
+## 4. Emit — print, append, verify the scorecard record
 1. **Print the full review** to the user: Summary (1–3 lines: what landed, PR#, scope) → Acceptance verdicts (§2) → Quality verdict (§3) → Coverage.
 2. **Append one JSONL record** to `pipeline/audit/produced-review.jsonl` (gitignored by the existing `/pipeline/audit/*.jsonl` rule — global to the main checkout, same as the other sinks) **via the sanctioned helper — never an inline append that names the sink path.** A `node -e`/`python3 -c` whose command text names `pipeline/audit/…` (or a bare `mkdir pipeline/audit`) trips the sensitive-file permission prompt on that guarded tree; `bin/log-audit-record.mjs` buries the path inside the script (allow-listed by `Bash(node ~/.claude/bin/*.mjs)`), creates the dir with its own `mkdirSync`, stamps `ts` from a real clock when omitted, and redacts secret-shaped free-text — so the append raises no prompt (conventions 5, 7, 8). Build the object with a **real JSON serializer** (`node -e` / `python3 -c` — never hand-assemble JSON strings, convention 8B) and pipe it to the helper:
    ```bash
@@ -91,6 +91,11 @@ End §3 with a **Coverage** line: what you did NOT cover (files skipped on a lar
    `subject: "review-produced"` keys the record for the scorecard exactly as `feedback.jsonl` keys off `subject`; `ticket` is the per-ticket join key the scorecard's rollup groups on. Keep `subject` byte-stable — the scorecard matches on the literal string.
 
    **Redaction.** Evidence strings are short `file:line` citations + brief quotes; in a repo whose diffs may carry secrets, the append helper passes every free-text leaf through the same `redact()` the other sinks use (`bin/transcript-resolver.mjs`) — so secret-shaped tokens are masked automatically and you run no separate redact step. Citations themselves (paths/line numbers) are safe and pass through untouched.
+3. **Verify the append — convention 8's read-back, never a hand-rolled path.** The sink is **global** (`bin/log-audit-record.mjs` resolves it from its own install location, not this repo's cwd — see the comment atop that file), so `pipeline/audit/produced-review.jsonl` is **not** a path relative to this repo's checkout; a land running from a foreign repo (e.g. a `myapp` worktree) that `tail`s that relative path will always get `No such file or directory`, proving nothing (V-682). Use the helper's own `--tail` mode instead — it prints the resolved absolute path first, so the read-back needs no hard-coded path of its own:
+   ```bash
+   node ~/.claude/bin/log-audit-record.mjs --sink produced-review.jsonl --tail 1
+   ```
+   Exit 0 and the last line showing this ticket's just-appended record (`"ticket":"<ID>"`) is the read-back; a non-zero exit or a missing/mismatched `ticket` means the append did not land — surface that in the `result:` line rather than asserting success from intent.
 
 ### Worked example record
 A real entry as written by this skill (pretty-printed here; one line in the file):
@@ -99,7 +104,7 @@ A real entry as written by this skill (pretty-printed here; one line in the file
 ```
 The scorecard ingests this as lens (e): per-ticket it shows acceptance met/partial/missed + the quality verdict; aggregated it counts partial/missed rates and recurring quality smells across tickets.
 
-Emit `result:` on its own line: `result: /review-produced <ID> — acceptance <met>/<partial>/<missed>, quality <one-word overall>; record appended to pipeline/audit/produced-review.jsonl.`
+Emit `result:` on its own line: `result: /review-produced <ID> — acceptance <met>/<partial>/<missed>, quality <one-word overall>; record appended + verified at <resolved path from --tail>.` (or, on a failed read-back: `; record append UNVERIFIED — <--tail exit/output>`).
 
 ## Hard rules
 - **Review-only on source.** No `Edit`/`Write` to code, no merge, no Linear-state change. The single write is the append to `produced-review.jsonl` (§4). Describe fixes in prose; don't patch.

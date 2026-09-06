@@ -4,9 +4,11 @@
 //
 // Secret-shaped literals here are synthetic (never real credentials).
 
-import { finalizeRecord, buildLine, resolveSinkPath, redactDeep, ALLOWED_SINKS, appendRecord, parseFlags, readRecordJson } from "./log-audit-record.mjs";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { finalizeRecord, buildLine, resolveSinkPath, redactDeep, ALLOWED_SINKS, appendRecord, parseFlags, readRecordJson, tailLines } from "./log-audit-record.mjs";
+import { mkdtempSync, readFileSync, rmSync, mkdirSync, copyFileSync, realpathSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 
 let fails = 0;
@@ -88,6 +90,71 @@ throws("readRecordJson rejects a blank --record", () => readRecordJson({ record:
     check("appendRecord is append (not overwrite)", written.length === 2 && JSON.parse(written[1]).ticket === "V-335-itest-2");
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// --- tailLines: the convention-8 read-back surface (V-682) ---------------------
+{
+  check("tailLines on an absent sink returns [] (not an error)", tailLines(join(tmpdir(), "log-audit-record-no-such-file.jsonl"), 5).length === 0);
+
+  const dir = mkdtempSync(join(tmpdir(), "log-audit-record-tail-test-"));
+  try {
+    const sink = join(dir, "produced-review.jsonl");
+    appendRecord(sink, buildLine({ lens: "produced-review", ticket: "V-682-a" }, TS));
+    appendRecord(sink, buildLine({ lens: "produced-review", ticket: "V-682-b" }, TS));
+    appendRecord(sink, buildLine({ lens: "produced-review", ticket: "V-682-c" }, TS));
+
+    const last1 = tailLines(sink, 1);
+    check("tail 1 returns exactly the last line", last1.length === 1 && JSON.parse(last1[0]).ticket === "V-682-c");
+
+    const last2 = tailLines(sink, 2);
+    check(
+      "tail 2 returns the last two lines in order",
+      last2.length === 2 && JSON.parse(last2[0]).ticket === "V-682-b" && JSON.parse(last2[1]).ticket === "V-682-c"
+    );
+
+    const overCount = tailLines(sink, 100);
+    check("tail n > line count returns every line, not an error", overCount.length === 3);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// --- CLI end-to-end, from a cwd nowhere near this install (V-682 acceptance #3):
+//     an isolated copy of this script (+ its one dependency) run from an unrelated
+//     tmp cwd — proving both the append AND the documented --tail read-back are
+//     cwd-independent, without touching this repo's real pipeline/audit/*.jsonl. ---
+{
+  const installDir = mkdtempSync(join(tmpdir(), "log-audit-record-install-"));
+  const foreignCwd = mkdtempSync(join(tmpdir(), "log-audit-record-foreign-cwd-"));
+  try {
+    const binDir = join(installDir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const here = dirname(fileURLToPath(import.meta.url));
+    copyFileSync(join(here, "log-audit-record.mjs"), join(binDir, "log-audit-record.mjs"));
+    copyFileSync(join(here, "transcript-resolver.mjs"), join(binDir, "transcript-resolver.mjs"));
+    const script = join(binDir, "log-audit-record.mjs");
+
+    const appendOut = execFileSync(
+      "node",
+      [script, "--sink", "produced-review.jsonl", "--record", JSON.stringify({ lens: "produced-review", ticket: "V-682-e2e" })],
+      { cwd: foreignCwd, encoding: "utf8" }
+    );
+    // realpath both sides: on macOS $TMPDIR (/var/folders/...) is itself a symlink
+    // to /private/var/folders/..., which fileURLToPath resolves inside the child
+    // process — a literal join(installDir, ...) would spuriously mismatch.
+    const expectedSink = join(realpathSync(installDir), "pipeline", "audit", "produced-review.jsonl");
+    check("append: prints the resolved absolute sink path", appendOut.includes(`appended to ${expectedSink}`));
+
+    const tailOut = execFileSync("node", [script, "--sink", "produced-review.jsonl", "--tail", "1"], {
+      cwd: foreignCwd,
+      encoding: "utf8",
+    });
+    check("--tail: prints the same resolved sink path", tailOut.includes(`sink: ${expectedSink}`));
+    check("--tail: shows the just-appended record", tailOut.includes('"ticket":"V-682-e2e"') || tailOut.includes('"ticket": "V-682-e2e"'));
+  } finally {
+    rmSync(installDir, { recursive: true, force: true });
+    rmSync(foreignCwd, { recursive: true, force: true });
   }
 }
 

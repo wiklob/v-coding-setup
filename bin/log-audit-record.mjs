@@ -35,11 +35,20 @@
 //     --sink    (required) the sink basename — one of the allowlisted names below.
 //     --record  (optional) the record JSON inline; omit to read it from stdin.
 //   `ts` is stamped from a real clock when the record omits it (never fabricated).
+//   On success, prints `appended to <absolute sink path>` — the caller's read-back
+//   surface (V-682): the write is global and cwd-independent, but a caller in a
+//   non-~/.claude repo has no way to guess the resolved path on its own, so a
+//   hand-rolled `tail pipeline/audit/produced-review.jsonl` verify fails from every
+//   cwd but this one.
 //
-// Exit codes: 0 on a successful append; 1 on a usage/parse error (bad/absent record,
-//   unknown sink) — so a caller and the test can see a malformed record rather than
-//   have it swallowed. Callers (/land-ticket §8.6) treat a non-zero exit as a
-//   non-blocking telemetry miss and continue.
+// READ-BACK (V-682): --tail <n> prints the sink's absolute path, then its last n
+//   lines — the sanctioned convention-8 read-back after an append, run from ANY cwd:
+//   node ~/.claude/bin/log-audit-record.mjs --sink produced-review.jsonl --tail 1
+//
+// Exit codes: 0 on a successful append or tail read; 1 on a usage/parse error
+//   (bad/absent record, unknown sink, non-numeric --tail) — so a caller and the test
+//   can see a malformed record rather than have it swallowed. Callers (/land-ticket
+//   §8.6) treat a non-zero exit as a non-blocking telemetry miss and continue.
 
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -91,12 +100,28 @@ export function appendRecord(sinkPath, line) {
   appendFileSync(sinkPath, line);
 }
 
+// Read-back for convention 8's "observe before you claim" — the last `n` JSONL
+// lines of a sink, or [] when the sink hasn't been written yet (no such file is
+// not an error here: an empty/absent sink is a valid, observable state, not a
+// usage mistake). (V-682)
+export function tailLines(sinkPath, n) {
+  let raw;
+  try {
+    raw = readFileSync(sinkPath, "utf8");
+  } catch {
+    return [];
+  }
+  const lines = raw.split("\n").filter((l) => l.length > 0);
+  return n >= lines.length ? lines : lines.slice(-n);
+}
+
 export function parseFlags(argv) {
   const f = {};
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--sink") f.sink = argv[++i];
     else if (a === "--record") f.record = argv[++i];
+    else if (a === "--tail") f.tail = argv[++i];
   }
   return f;
 }
@@ -110,8 +135,20 @@ export function readRecordJson(flags) {
 function main() {
   const flags = parseFlags(process.argv.slice(2));
   const sinkPath = resolveSinkPath(flags.sink);
+
+  if (flags.tail !== undefined) {
+    const n = Number(flags.tail);
+    if (!Number.isInteger(n) || n <= 0) {
+      throw new Error(`--tail requires a positive integer (got ${JSON.stringify(flags.tail)})`);
+    }
+    process.stdout.write(`sink: ${sinkPath}\n`);
+    for (const line of tailLines(sinkPath, n)) process.stdout.write(line + "\n");
+    return;
+  }
+
   const record = readRecordJson(flags);
   appendRecord(sinkPath, buildLine(record, new Date().toISOString()));
+  process.stdout.write(`appended to ${sinkPath}\n`);
 }
 
 const isMain = process.argv[1] && process.argv[1].endsWith("log-audit-record.mjs");

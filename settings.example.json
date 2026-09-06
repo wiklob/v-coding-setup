@@ -269,7 +269,8 @@
       "git push to feature branches of the user's own repos is allowed: the /land-ticket flow pushes per-ticket branches before opening PRs.",
       "Running supabase CLI subcommands locally that do not push to prod (migration new, db diff, db dump from local, gen types) is allowed: they do not mutate production.",
       "Sourcing .envrc and using the resulting environment variables to authenticate to internal services is allowed: this is the intended way to use credentials. The prohibition is on displaying their values, not on using them.",
-      "Editing files (Edit/Write/MultiEdit) anywhere under ~/.claude — including its git worktrees — is allowed without confirmation: this directory is the self-hosted pipeline's own source, which the build/scope/land flow edits constantly. (Edits to settings.json / settings.local.json still escalate via the guard hook, and secret-file writes remain hard-denied.)"
+      "Editing files (Edit/Write/MultiEdit) anywhere under ~/.claude — including its git worktrees — is allowed without confirmation: this directory is the self-hosted pipeline's own source, which the build/scope/land flow edits constantly. (Edits to settings.json / settings.local.json still escalate via the guard hook, and secret-file writes remain hard-denied.)",
+      "When /go launches in a non-repo '*-parent' scoping directory (e.g. myapp-parent), resolving cwd to its single child git repository — one `cd` to that repo's absolute path — before calling EnterWorktree is allowed: this is cwd navigation to reach a real repo root (V-589), not scope drift."
     ],
     "soft_deny": [
       "$defaults",

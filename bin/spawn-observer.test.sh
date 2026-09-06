@@ -16,7 +16,13 @@ export SPAWN_OBSERVER_MAX_GROWTH=5
 export SPAWN_OBSERVER_ACTIVE_MINUTES=30
 export SPAWN_OBSERVER_PARK_STRIKES=3
 export SPAWN_OBSERVER_PARK_WINDOW_MIN=60
-PATH_NO_OSASCRIPT="$TMP/nobin"; mkdir -p "$PATH_NO_OSASCRIPT"   # keep notifications quiet
+# keep notifications quiet: shadow osascript with a no-op stub (an empty dir on
+# PATH — the previous approach — shadows nothing; the real binary was still
+# found, so every test run pinged the desktop with fixture "incidents")
+mkdir -p "$TMP/nobin"
+printf '#!/bin/sh\nexit 0\n' > "$TMP/nobin/osascript"
+chmod +x "$TMP/nobin/osascript"
+PATH="$TMP/nobin:$PATH"; export PATH
 
 pass=0; fail=0
 ok()  { pass=$((pass+1)); echo "  ok  $1"; }

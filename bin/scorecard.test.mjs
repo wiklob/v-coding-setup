@@ -140,19 +140,19 @@ function check(name, cond) {
     execFileSync("git", ["init", "-q"], { cwd: dir });
     const statsDir = join(dir, ".claude", "usage-stats");
     mkdirSync(statsDir, { recursive: true });
-    // Written as if by a land in an unrelated repo ("cbapp") — V-681 makes
+    // Written as if by a land in an unrelated repo ("myapp") — V-681 makes
     // usage-stats.mjs resolve to this same global dir regardless of that repo's
     // own cwd, so its `repo` field is the ONLY trace of where the land happened.
     writeFileSync(
       join(statsDir, "20260101-000000-V-500.json"),
-      JSON.stringify({ ticket: "V-500", repo: "cbapp", totals: { output: 12345 } }) + "\n"
+      JSON.stringify({ ticket: "V-500", repo: "myapp", totals: { output: 12345 } }) + "\n"
     );
 
     const here = dirname(fileURLToPath(import.meta.url));
     const out = execFileSync("node", [join(here, "scorecard.mjs"), "--aggregate", "--json"], { cwd: dir, encoding: "utf8" });
     const ag = JSON.parse(out);
     const row = ag.costTickets.find(([t]) => t === "V-500");
-    check("costTickets includes a foreign-repo (`repo`:\"cbapp\") land from the global sink", !!row);
+    check("costTickets includes a foreign-repo (`repo`:\"myapp\") land from the global sink", !!row);
     check("its output-token total is read correctly regardless of `repo`", row?.[1] === 12345);
   } finally {
     rmSync(dir, { recursive: true, force: true });

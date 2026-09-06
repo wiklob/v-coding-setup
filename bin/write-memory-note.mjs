@@ -27,7 +27,7 @@
 //
 // USAGE:
 //   <write the note prose> | node ~/.claude/bin/write-memory-note.mjs \
-//     --path ~/.claude/projects/-Users-wiklob--claude/memory/<slug>.md
+//     --path ~/.claude/projects/<project-slug>/memory/<slug>.md
 //   or:  node ~/.claude/bin/write-memory-note.mjs --path <path> --body "<text>"
 //
 //   --path  (required) the note's target — absolute or `~`-prefixed; checked as above.
